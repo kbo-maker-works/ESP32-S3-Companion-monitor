@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter">
+  <!-- Thermometer tube & bulb -->
+  <path d="M10 31V10C10 8 16 8 16 10V31" />
+  <circle cx="13" cy="36" r="5" fill="#FFFFFF" />
+  <!-- Scale ticks -->
+  <line x1="18" y1="14" x2="21" y2="14" />
+  <line x1="18" y1="20" x2="21" y2="20" />
+  <line x1="18" y1="26" x2="21" y2="26" />
+  <!-- Telemetry baseline & peak wave -->
+  <line x1="25" y1="38" x2="43" y2="38" />
+  <polyline points="26,30 30,20 34,26 38,12 42,16" />
+  <rect x="29" y="19" width="2" height="2" fill="#FFFFFF" stroke="none" />
+  <rect x="37" y="11" width="2" height="2" fill="#FFFFFF" stroke="none" />
+</svg>

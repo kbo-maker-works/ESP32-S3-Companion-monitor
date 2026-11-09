@@ -1,0 +1,33 @@
+#pragma once
+
+// Wi-Fi (opcional: si lo dejas así, se configura desde el portal "Companion-Setup")
+#define WIFI_SSID     "your-wifi-name"
+#define WIFI_PASSWORD "your-wifi-password"
+
+// Punto de acceso de configuración, siempre activo (http://192.168.4.1 o http://companion.local)
+#define AP_SSID     "Companion-Setup"
+#define AP_PASSWORD ""   // vacío = abierto; si pones una, mínimo 8 caracteres
+
+// Zona horaria POSIX: cambia sola entre horario de invierno y verano
+#define TZ_INFO    "CET-1CEST,M3.5.0,M10.5.0/3"   // Madrid
+#define NTP_SERVER "pool.ntp.org"
+
+// Valores de fábrica: hora, ubicación, brillo y AP se cambian desde el portal (se guardan en la placa)
+
+// Open-Meteo (sin API key)
+#define CITY_NAME "Madrid"
+#define OWM_LAT "40.4168"
+#define OWM_LON "-3.7038"
+
+// Brillo de la pantalla 0-255
+#define BACKLIGHT 255
+
+// Fondos en la microSD (formato .565, ver tools/convert_bg.py)
+#define BG_HOME     "/bg/home.565"
+#define BG_SETTINGS "/bg/grid_background_32px.565"
+
+// Táctil: TOUCH_DEBUG=1 pinta un punto rojo donde detecta el dedo.
+// Si sale en espejo, activa el flip del eje que corresponda.
+#define TOUCH_DEBUG  0
+#define TOUCH_FLIP_X 0
+#define TOUCH_FLIP_Y 0
