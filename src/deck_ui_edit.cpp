@@ -1,5 +1,6 @@
-// Deck UI: page edit mode on the device.
+// Deck UI: page edit mode on the device, and its "+" picker (apps, clock).
 #include "deck_ui_int.h"
+#include "app.h"
 
 namespace deckui {
 
@@ -184,6 +185,193 @@ String edTileName(const TileDef& d) {
   return m ? String(m->name) : "PC metric " + String(d.metric);
 }
 
+void edMakeBox(int k, const TileDef& d);
+
+// --- "+": add a tile ---------------------------------------------------------------
+// What the picker offers, built when it opens: every app of the registry, then
+// the other tile kinds that need no setup. Widgets will join as their own group.
+struct PickItem {
+  const char* group;
+  TileDef def;
+  bool soon;  // an app not written yet
+};
+std::vector<PickItem> s_pickItems;
+lv_obj_t* s_pick = nullptr;      // the picker sheet, a child of the editor root
+lv_obj_t* s_pickDead = nullptr;  // a closed sheet, deleted later (see pickClose)
+uint32_t s_addSeq = 0;
+
+bool edCellFree(const Cell& c) {
+  for (const EdTile& o : s_ed.tiles)
+    if (o.c.placed && !o.removed && o.c.x < c.x + c.w && c.x < o.c.x + o.c.w && o.c.y < c.y + c.h &&
+        c.y < o.c.y + o.c.h)
+      return false;
+  return true;
+}
+
+// The tile on this page's first free cell (one cell, 2x2 halves). False, with
+// a toast, when there is no room.
+bool edAdd(const TileDef& def) {
+  int live = 0;
+  for (const EdTile& t : s_ed.tiles) live += !t.removed;
+  Cell c = {true, 0, 0, 2, 2};
+  bool found = false;
+  for (int y = 0; y + c.h <= s_ed.rows && !found; y++)
+    for (int x = 0; x + c.w <= s_ed.cols && !found; x++) {
+      c.x = x;
+      c.y = y;
+      found = edCellFree(c);
+    }
+  if (!found || live >= MAX_PAGE_TILES) {
+    deckToastShow(found ? "La página no admite más tiles" : "No hay hueco: quita o achica un tile", 2200);
+    return false;
+  }
+  TileDef d = def;
+  d.id = "t" + String(millis(), HEX) + String(s_addSeq++);
+  s_ed.added.push_back(d);
+  const int k = (int)s_ed.tiles.size();
+  s_ed.tiles.push_back({c, false, nullptr});
+  edMakeBox(k, s_ed.added.back());
+  s_ed.dirty = true;
+  return true;
+}
+
+bool appOnPage(const String& id) {
+  const size_t own = s_ed.tiles.size() - s_ed.added.size();
+  for (size_t i = 0; i < s_ed.tiles.size(); i++) {
+    if (s_ed.tiles[i].removed) continue;
+    const TileDef& d = i < own ? s_cfg.pages[s_ed.cfgPage].tiles[i] : s_ed.added[i - own];
+    if (d.tap.kind == ACT_APP && d.tap.app == id) return true;
+  }
+  return false;
+}
+
+// Hidden now, deleted on the next open or with the editor: this can run in an
+// event of the sheet's own child, and an async delete could outlive the root.
+void pickClose() {
+  if (s_pick) {
+    lv_obj_add_flag(s_pick, LV_OBJ_FLAG_HIDDEN);
+    s_pickDead = s_pick;
+  }
+  s_pick = nullptr;
+  s_pickItems.clear();
+  s_pickItems.shrink_to_fit();
+}
+
+void pickRowEvent(lv_event_t* e) {
+  const size_t i = (size_t)(uintptr_t)lv_event_get_user_data(e);
+  if (i < s_pickItems.size() && edAdd(s_pickItems[i].def)) pickClose();
+}
+void pickCloseEvent(lv_event_t*) { pickClose(); }
+
+void pickBuild() {
+  s_pickItems.clear();
+  for (size_t i = 0; i < app::count(); i++) {
+    const app::Def* a = app::get(i);
+    PickItem it = {"Apps", TileDef(), !a->ready};
+    it.def.type = TILE_ACTION;
+    it.def.label = a->name;
+    it.def.icon = a->icon;
+    it.def.tap.kind = ACT_APP;
+    it.def.tap.app = a->id;
+    s_pickItems.push_back(it);
+  }
+  PickItem clock = {"Otros", TileDef(), false};
+  clock.def.type = TILE_CLOCK;
+  clock.def.label = "Reloj";
+  s_pickItems.push_back(clock);
+}
+
+void pickOpen() {
+  if (!s_ed.root || s_pick) return;
+  if (s_pickDead) lv_obj_delete(s_pickDead);
+  s_pickDead = nullptr;
+  pickBuild();
+  const int w = logicalW(), h = logicalH();
+  s_pick = lv_obj_create(s_ed.root);
+  lv_obj_remove_style_all(s_pick);
+  lv_obj_set_size(s_pick, w, h);
+  lv_obj_set_style_bg_color(s_pick, lv_color_hex(C_BG), 0);
+  lv_obj_set_style_bg_opa(s_pick, LV_OPA_COVER, 0);
+  lv_obj_remove_flag(s_pick, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(s_pick, LV_OBJ_FLAG_CLICKABLE);
+
+  lv_obj_t* title = lv_label_create(s_pick);
+  lv_label_set_text(title, "Añadir a la página");
+  lv_obj_set_style_text_font(title, &deck_font_20, 0);
+  lv_obj_set_pos(title, 12, 13);
+  lv_obj_t* close = qpButton(s_pick, w - 96 - 8, 4, 96, "Cerrar", false);
+  lv_obj_add_event_cb(close, pickCloseEvent, LV_EVENT_CLICKED, nullptr);
+
+  // Groups of finger-sized buttons, wrapping; the list scrolls when long.
+  lv_obj_t* list = lv_obj_create(s_pick);
+  lv_obj_remove_style_all(list);
+  lv_obj_set_pos(list, 0, ED_BAR_H);
+  lv_obj_set_size(list, w, h - ED_BAR_H);
+  lv_obj_set_flex_flow(list, LV_FLEX_FLOW_ROW_WRAP);
+  lv_obj_set_style_pad_hor(list, 8, 0);
+  lv_obj_set_style_pad_bottom(list, 8, 0);
+  lv_obj_set_style_pad_row(list, 8, 0);
+  lv_obj_set_style_pad_column(list, 8, 0);
+  lv_obj_set_scroll_dir(list, LV_DIR_VER);
+  const int bw = (w - 16 - 2 * 8) / 3;
+  const char* group = nullptr;
+  for (size_t i = 0; i < s_pickItems.size(); i++) {
+    const PickItem& it = s_pickItems[i];
+    if (!group || strcmp(group, it.group)) {
+      group = it.group;
+      lv_obj_t* g = lv_label_create(list);
+      lv_label_set_text(g, group);
+      lv_obj_set_style_text_color(g, lv_color_hex(C_DIM), 0);
+      lv_obj_set_width(g, lv_pct(100));
+      lv_obj_add_flag(g, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
+    }
+    lv_obj_t* b = lv_obj_create(list);
+    lv_obj_remove_style_all(b);
+    lv_obj_set_size(b, bw, 56);
+    lv_obj_set_style_radius(b, 12, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(C_BUTTON), 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(C_TILE_PRESSED), LV_STATE_PRESSED);
+    lv_obj_set_style_pad_hor(b, 10, 0);
+    lv_obj_remove_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(b, pickRowEvent, LV_EVENT_SHORT_CLICKED, (void*)(uintptr_t)i);
+    lv_obj_t* name = lv_label_create(b);
+    lv_label_set_text(name, it.def.label.c_str());
+    lv_obj_set_style_text_font(name, &deck_font_20, 0);
+    lv_label_set_long_mode(name, LV_LABEL_LONG_MODE_DOTS);
+    lv_obj_set_width(name, bw - 20);
+    const bool placed = it.def.tap.kind == ACT_APP && appOnPage(it.def.tap.app);
+    if (it.soon || placed) {
+      lv_obj_align(name, LV_ALIGN_TOP_LEFT, 0, 7);
+      lv_obj_t* note = lv_label_create(b);
+      lv_label_set_text(note, placed ? "Ya en la página" : "Próximamente");
+      lv_obj_set_style_text_font(note, &deck_font_12, 0);
+      lv_obj_set_style_text_color(note, lv_color_hex(C_DIM), 0);
+      lv_obj_align(note, LV_ALIGN_BOTTOM_LEFT, 0, -7);
+    } else {
+      lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, 0);
+    }
+  }
+}
+
+void edAddEvent(lv_event_t*) { pickOpen(); }
+
+// Bench hook (/api/deck/edit?op=pick|add): i < 0 opens the picker, else adds
+// its item i (in the order the picker lists them).
+bool edTestPick(int i) {
+  if (!s_ed.root) return false;
+  if (i < 0) {
+    pickOpen();
+    return s_pick != nullptr;
+  }
+  if (s_pickItems.empty()) pickBuild();
+  if (i >= (int)s_pickItems.size()) return false;
+  const bool ok = edAdd(s_pickItems[i].def);
+  pickClose();
+  return ok;
+}
+
 void edMakeBox(int k, const TileDef& d) {
   const uint32_t accent = d.type == TILE_METRIC ? metricAccent(d) : d.hasColor ? d.color : C_ACCENT;
   lv_obj_t* b = lv_obj_create(s_ed.root);
@@ -272,12 +460,14 @@ void edOpen(int page) {
   lv_obj_remove_flag(root, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_flag(root, LV_OBJ_FLAG_CLICKABLE);  // taps never reach the page
 
-  constexpr int BW = 84;
+  constexpr int BW = 84, AW = 48;
   s_ed.title = lv_label_create(root);
   lv_obj_set_style_text_font(s_ed.title, &deck_font_20, 0);
   lv_label_set_long_mode(s_ed.title, LV_LABEL_LONG_MODE_DOTS);
-  lv_obj_set_width(s_ed.title, w - 2 * BW - 40);
+  lv_obj_set_width(s_ed.title, w - 2 * BW - AW - 48);
   lv_obj_set_pos(s_ed.title, 12, 13);
+  lv_obj_t* add = qpButton(root, w - 2 * BW - AW - 24, 4, AW, LV_SYMBOL_PLUS, false);
+  lv_obj_add_event_cb(add, edAddEvent, LV_EVENT_CLICKED, nullptr);
   lv_obj_t* cancel = qpButton(root, w - 2 * BW - 16, 4, BW, "Cancel", false);
   lv_obj_add_event_cb(cancel, edCancelEvent, LV_EVENT_CLICKED, nullptr);
   lv_obj_t* done = qpButton(root, w - BW - 8, 4, BW, LV_SYMBOL_OK " Done", false);
@@ -325,6 +515,8 @@ void edOpen(int page) {
 
 void edClose() {
   if (!s_ed.root) return;
+  s_pick = s_pickDead = nullptr;  // children of the root, deleted with it
+  s_pickItems.clear();
   lv_obj_delete(s_ed.root);
   s_ed = EditState();
   setModalOpen(false);
@@ -365,7 +557,7 @@ bool edBuild(String& out, String& err) {
     }
   }
   JsonArray tiles = pv["tiles"].as<JsonArray>();
-  const size_t own = s_ed.tiles.size();
+  const size_t own = s_ed.tiles.size() - s_ed.added.size();
   if (pv.isNull() || tiles.size() != own) {
     err = "page changed meanwhile";
     return false;
@@ -390,6 +582,24 @@ bool edBuild(String& out, String& err) {
   }
   for (size_t i = own; i-- > 0;)
     if (s_ed.tiles[i].removed) tiles.remove(i);
+  for (size_t j = 0; j < s_ed.added.size(); j++) {
+    const EdTile& t = s_ed.tiles[own + j];
+    if (t.removed) continue;
+    const TileDef& d = s_ed.added[j];
+    JsonObject tv = tiles.add<JsonObject>();
+    tv["id"] = d.id;
+    if (d.type == TILE_CLOCK) {
+      tv["type"] = "clock";
+    } else {
+      tv["type"] = "action";
+      tv["label"] = d.label;
+      tv["icon"] = d.icon;
+      JsonObject tap = tv["tap"].to<JsonObject>();
+      tap["action"] = "app";
+      tap["app"] = d.tap.app;
+    }
+    putHalves(tv["pos"][key].to<JsonObject>(), t.c);
+  }
   out = "";
   serializeJson(doc, out);
   return true;

@@ -2185,7 +2185,8 @@ static void handleDeckConfirm() {
   sendJsonMessage(ok ? 200 : 409, ok, ok ? "OK" : "No confirm card open");
 }
 
-// POST /api/deck/edit?op=open|move|remove|done|cancel[&tile=<index>&x=&y=&w=&h=]
+// POST /api/deck/edit?op=open|move|remove|pick|add|done|cancel[&tile=<index>&x=&y=&w=&h=]
+// (add: tile = index of the item in the "+" picker)
 // - bench hook, drives the on-device edit mode. x, y, w, h in half cells.
 static void handleDeckEdit() {
   const bool ok = deckTestEdit(server.arg("op"), server.arg("tile").toInt(), server.arg("x").toInt(),

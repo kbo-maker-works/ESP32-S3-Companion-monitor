@@ -1374,6 +1374,8 @@ bool deckTestEdit(const String& op, int tile, int x, int y, int w, int h) {
     return s_ed.root != nullptr;
   }
   if (!s_ed.root) return false;
+  if (op == "pick") return edTestPick(-1);
+  if (op == "add") return edTestPick(tile);
   if (op == "done" || op == "cancel") {
     s_ed.pending = op == "done" ? EditState::P_SAVE : EditState::P_CANCEL;
     return true;

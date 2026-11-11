@@ -251,6 +251,8 @@ struct EditState {
   String name;
   int orient = 0, cols = 1, rows = 1, cw = 1, ch = 1;  // in half cells, px per half cell
   std::vector<EdTile> tiles;
+  // Tiles added with "+" (deck_ui_edit.cpp): s_ed.tiles past the page's own get these.
+  std::vector<TileDef> added;
   bool dirty = false;
   enum Pending : uint8_t { P_NONE, P_SAVE, P_CANCEL } pending = P_NONE;
   // The drag in progress: which tile, resize or move, where it would land.
@@ -333,6 +335,8 @@ void dailyBarSync();
 void closeModal();
 void refreshModal();
 void openModal(int tileIdx);
+// Edit mode "+" picker, for the bench hook (deck_ui_edit.cpp).
+bool edTestPick(int i);
 // Full-screen app (app.h) in the card slot: opens from and closes into its tile.
 void openApp(int tileIdx, const String& id);
 bool appShown();
