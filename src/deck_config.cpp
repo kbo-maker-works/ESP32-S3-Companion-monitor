@@ -1,6 +1,7 @@
 // Guition deck configuration loader. See deck_config.h for the schema.
 #include "deck_config.h"
 #include "deck_bambu.h"
+#include "app.h"
 #include "config.h"
 #include "psram_json.h"
 #include <ArduinoJson.h>
@@ -18,37 +19,21 @@ const char kDefaultDeck[] PROGMEM = R"JSON({
   "schema": 1,
   "theme": "midnight",
   "pages": [
-    { "id": "desk", "name": "Desk",
-      "layouts": { "landscape": { "cols": 4, "rows": 3 } },
+    { "id": "inicio", "name": "Inicio", "home": true,
+      "layouts": { "landscape": { "cols": 3, "rows": 2 } },
       "tiles": [
-        { "id": "clock", "type": "clock",
-          "pos": { "landscape": { "x": 0, "y": 0, "w": 2, "h": 1 } } },
-        { "id": "media", "type": "media",
-          "pos": { "landscape": { "x": 2, "y": 0, "w": 2, "h": 2 } } },
-        { "id": "cpu", "type": "metric", "metric": 1 },
-        { "id": "gpu", "type": "metric", "metric": 2 },
-        { "id": "volume", "type": "slider", "control": "pc-volume", "label": "Volume", "icon": "mdi:volume-high",
-          "pos": { "landscape": { "x": 0, "y": 2, "w": 2, "h": 1 } } },
-        { "id": "lock", "type": "action", "label": "Lock PC", "icon": "mdi:lock",
-          "tap": { "action": "pc", "cmd": "lock" }, "confirm": "always" },
-        { "id": "topc", "type": "action", "label": "PC", "sub": "Page", "icon": "mdi:chevron-right",
-          "tap": { "action": "page", "page": "pc" } }
-      ] },
-    { "id": "pc", "name": "PC",
-      "layouts": { "landscape": { "cols": 4, "rows": 3 } },
-      "tiles": [
-        { "id": "m1", "type": "metric", "metric": 1, "style": "chart",
-          "pos": { "landscape": { "x": 0, "y": 0, "w": 2, "h": 1 } } },
-        { "id": "m2", "type": "metric", "metric": 2, "style": "chart",
-          "pos": { "landscape": { "x": 2, "y": 0, "w": 2, "h": 1 } } },
-        { "id": "m3", "type": "metric", "metric": 3 },
-        { "id": "m4", "type": "metric", "metric": 4 },
-        { "id": "m5", "type": "metric", "metric": 5 },
-        { "id": "m6", "type": "metric", "metric": 6 },
-        { "id": "m7", "type": "metric", "metric": 7, "style": "bar",
-          "pos": { "landscape": { "x": 0, "y": 2, "w": 2, "h": 1 } } },
-        { "id": "m8", "type": "metric", "metric": 8, "style": "bar",
-          "pos": { "landscape": { "x": 2, "y": 2, "w": 2, "h": 1 } } }
+        { "id": "ia", "type": "action", "label": "IA", "icon": "mdi:robot-outline",
+          "tap": { "action": "app", "app": "ia" } },
+        { "id": "sistema", "type": "action", "label": "Sistema", "icon": "mdi:chip",
+          "tap": { "action": "app", "app": "sistema" } },
+        { "id": "red", "type": "action", "label": "Red", "icon": "mdi:lan",
+          "tap": { "action": "app", "app": "red" } },
+        { "id": "radar", "type": "action", "label": "Radar", "icon": "mdi:radar",
+          "tap": { "action": "app", "app": "radar" } },
+        { "id": "audio", "type": "action", "label": "Audio", "icon": "mdi:speaker",
+          "tap": { "action": "app", "app": "audio" } },
+        { "id": "ajustes", "type": "action", "label": "Ajustes", "icon": "mdi:cog-outline",
+          "tap": { "action": "app", "app": "ajustes" } }
       ] }
   ]
 })JSON";
@@ -122,6 +107,13 @@ bool parseAction(JsonVariantConst v, TileAction& a, String* err, const String& w
     if (a.method != "GET" && a.method != "POST" && a.method != "PUT" && a.method != "PATCH" &&
         a.method != "DELETE") {
       if (err) *err = where + ": unknown http method '" + a.method + "'";
+      return false;
+    }
+  } else if (!strcmp(kind, "app")) {
+    a.kind = ACT_APP;
+    a.app = (const char*)(v["app"] | "");
+    if (!app::find(a.app.c_str())) {
+      if (err) *err = where + ": unknown app '" + a.app + "'";
       return false;
     }
   } else if (!strcmp(kind, "pc")) {

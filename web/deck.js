@@ -91,14 +91,18 @@
       const c = await api("/api/config");
       pcm = (c.metrics || []).slice().sort((a, b) => a.id - b.id);
       pcs = c.pcs || [];
+      apps = c.apps || [];
       if (!ori && c.display) ori = c.display.rotation % 2 ? "landscape" : "portrait";
     } catch (e) {
       pcm = [];
       pcs = [];
+      apps = [];
     }
   }
   /* Known PCs (first = default); a metric tile's PC and its metric list. */
   let pcs = [];
+  /* Apps a tile can open: [{id, name, icon, ready}] from the firmware (app.cpp). */
+  let apps = [];
   const pcOf = (t) => pcs.find((x) => x.id === (t.pc || "")) || (!t.pc && pcs[0]) || null;
   const mlist = (t) => {
     const p = pcOf(t);
@@ -907,6 +911,16 @@
   const isHttpSensor = (t) => t.type === "sensor" && !!t.http;
   const isHttp = (t) => !!(t.tap && t.tap.action === "http");
   const isPcCmd = (t) => !!(t.tap && t.tap.action === "pc");
+  const isApp = (t) => !!(t.tap && t.tap.action === "app");
+  /* Open an app; the label and icon follow the app unless they were changed by hand. */
+  function appSet(t, id) {
+    const a = apps.find((x) => x.id === id) || apps[0];
+    if (!a) return;
+    const old = apps.find((x) => x.id === (t.tap && t.tap.app));
+    t.tap = { action: "app", app: a.id };
+    if (!t.label || (old && t.label === old.name)) t.label = a.name;
+    if (!t.icon || (old && t.icon === old.icon)) t.icon = a.icon;
+  }
   /* PC commands: [cmd, label, icon]; the last three ask on the device by default. */
   const PCCMD = [
     ["media_play_pause", "Play / pause", "play-pause"],
@@ -936,7 +950,8 @@
     if (RISKY.includes(c[0])) t.confirm = "always";
     else if (old && RISKY.includes(old[0]) && t.confirm === "always") delete t.confirm;
   }
-  const tapName = (a) => (a.action === "page" ? "Open page " + a.page : a.action);
+  const tapName = (a) =>
+    a.action === "page" ? "Open page " + a.page : a.action === "app" ? "Open app " + a.app : a.action;
   const hdrText = (h) =>
     Object.keys(h || {})
       .map((k) => k + ": " + h[k])
@@ -984,7 +999,7 @@
     if (t.type === "action" || isHttpSensor(t)) {
       const tp = t.tap || {},
         k = isHttp(t) ? "http" : t.tap ? "keep" : "";
-      const kk = isPcCmd(t) ? "pc" : k;
+      const kk = isPcCmd(t) ? "pc" : isApp(t) && apps.length ? "app" : k;
       h +=
         '<div class="field">' +
         lbl("On tap") +
@@ -994,8 +1009,18 @@
         opt("", "None", kk === "") +
         opt("http", "HTTP request", kk === "http") +
         opt("pc", "PC command", kk === "pc") +
+        (apps.length ? opt("app", "App", kk === "app") : "") +
         (kk === "keep" ? opt("keep", tapName(tp), true) : "") +
         "</select></div>";
+      if (kk === "app")
+        h +=
+          '<div class="field">' +
+          lbl("App", "Opens full screen; it closes with its Inicio button.") +
+          '<select data-app="' +
+          i +
+          '">' +
+          apps.map((a) => opt(a.id, a.name + (a.ready ? "" : " (próximamente)"), tp.app === a.id)).join("") +
+          "</select></div>";
       if (kk === "pc") {
         wideAct = true;
         const tg = pcs.find((x) => x.id === (tp.pc || "")) || (!tp.pc && pcs[0]);
@@ -1976,7 +2001,7 @@
       +cells.toFixed(2) +
       " of " +
       c * r +
-      ' cells used</p><div class="dk-row" style="margin-top:12px"><button type="button" class="btn" id="dkAddPc">+ Add PC metric</button><button type="button" class="btn" id="dkAddHttp">+ Add HTTP button</button><button type="button" class="btn" id="dkAddPcCmd">+ Add PC control</button><button type="button" class="btn" id="dkAddPcVol">+ Add PC volume</button><button type="button" class="btn" id="dkAddMedia">+ Add now playing</button><button type="button" class="btn" id="dkAddClock">+ Add clock</button><button type="button" class="btn" id="dkAddHttpSensor">+ Add HTTP sensor</button>' +
+      ' cells used</p><div class="dk-row" style="margin-top:12px"><button type="button" class="btn" id="dkAddApp">+ Add app</button><button type="button" class="btn" id="dkAddPc">+ Add PC metric</button><button type="button" class="btn" id="dkAddHttp">+ Add HTTP button</button><button type="button" class="btn" id="dkAddPcCmd">+ Add PC control</button><button type="button" class="btn" id="dkAddPcVol">+ Add PC volume</button><button type="button" class="btn" id="dkAddMedia">+ Add now playing</button><button type="button" class="btn" id="dkAddClock">+ Add clock</button><button type="button" class="btn" id="dkAddHttpSensor">+ Add HTTP sensor</button>' +
       (prnOn() && (deck.printers || []).length
         ? '<button type="button" class="btn" id="dkAddPrinter">+ Add printer tile</button>'
         : "") +
@@ -2408,6 +2433,15 @@
         else delete p.auto;
         setDirty(true);
       };
+    $("dkAddApp").onclick = () => {
+      if (!apps.length) return;
+      const t = { id: "a" + Date.now().toString(36), type: "action" };
+      appSet(t, apps[0].id);
+      p.tiles.push(t);
+      more = p.tiles.length - 1;
+      setDirty(true);
+      renderPage();
+    };
     $("dkAddHttp").onclick = () => {
       p.tiles.push({
         id: "h" + Date.now().toString(36),
@@ -2442,7 +2476,16 @@
           else if (v === "pc") {
             delete t.tap;
             pcCmdSet(t, "media_play_pause");
-          } else delete t.tap;
+          } else if (v === "app") appSet(t, apps[0] && apps[0].id);
+          else delete t.tap;
+          setDirty(true);
+          renderPage();
+        }),
+    );
+    el.querySelectorAll("[data-app]").forEach(
+      (x) =>
+        (x.onchange = (e) => {
+          appSet(p.tiles[+x.dataset.app], e.target.value);
           setDirty(true);
           renderPage();
         }),

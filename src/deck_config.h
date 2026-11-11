@@ -117,6 +117,7 @@ enum ActionKind : uint8_t {
   ACT_DETAIL,  // "more-info": the tile's detail card
   ACT_HTTP,    // {method, url, body, contentType, headers}
   ACT_PC,      // {pc, cmd}: a command to a paired PC's companion
+  ACT_APP,     // {app}: open a full-screen app (app.h)
 };
 enum ConfirmMode : uint8_t { CONFIRM_NONE = 0, CONFIRM_OFF, CONFIRM_ALWAYS };
 enum WhenKind : uint8_t { WHEN_ALWAYS = 0, WHEN_PC_ON, WHEN_PC_OFF };
@@ -131,6 +132,7 @@ struct TileAction {
   String method, url, body, ctype;  // ACT_HTTP
   String headers;                   // ACT_HTTP: "Name: value\n" lines
   String pc, cmd;                   // ACT_PC: companion pc_id ("" = first PC), command
+  String app;                       // ACT_APP: app id
 };
 
 // set = an explicit cell (x, y). w and h always apply: a tile with only a

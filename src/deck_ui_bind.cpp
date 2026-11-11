@@ -335,6 +335,9 @@ void runAction(TileRt& r, const TileAction& a) {
       if (!pcSendCommand(a.pc, a.cmd.c_str(), err)) deckToastShow(err.c_str(), 2200);
       break;
     }
+    case ACT_APP:
+      openApp((int)(&r - &s_tiles[0]), a.app);
+      break;
     default:
       deckToastShow("No action set for this tile", 1500);
       break;
@@ -357,7 +360,7 @@ const char* pcCmdLabel(const String& cmd) {
 // Tile setting "confirm": "always" asks before any action that does something.
 // "off" asked before turning a tile off; no action does that any more.
 bool needsConfirm(const TileRt& r, const TileAction& a) {
-  if (a.kind == ACT_PAGE || a.kind == ACT_DETAIL) return false;
+  if (a.kind == ACT_PAGE || a.kind == ACT_DETAIL || a.kind == ACT_APP) return false;
   return r.def->confirm == CONFIRM_ALWAYS;
 }
 
@@ -365,6 +368,7 @@ bool needsConfirm(const TileRt& r, const TileAction& a) {
 const char* actionVerb(const TileRt&, const TileAction& a) {
   if (a.kind == ACT_HTTP) return "Send";
   if (a.kind == ACT_PC) return pcCmdLabel(a.cmd);
+  if (a.kind == ACT_APP) return "Abrir";
   return "Run";
 }
 

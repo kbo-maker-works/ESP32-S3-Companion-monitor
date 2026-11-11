@@ -21,6 +21,7 @@
 #include "deck_sys.h"
 #include "psram_json.h"
 #include "crash_log.h"
+#include "app.h"
 #include <LittleFS.h>
 #include <WebServer.h>
 #include <ArduinoJson.h>
@@ -262,6 +263,18 @@ static void handleApiConfig() {
   network["gateway"] = netSettings.gateway;
   network["subnet"] = netSettings.subnet;
   network["dns"] = netSettings.dns;
+
+  // Apps a tile can open ("On tap > App" in the tile editor).
+  JsonArray apps = doc["apps"].to<JsonArray>();
+  size_t appCount = 0;
+  const app::Def* appDefs = app::all(appCount);
+  for (size_t i = 0; i < appCount; i++) {
+    JsonObject a = apps.add<JsonObject>();
+    a["id"] = appDefs[i].id;
+    a["name"] = appDefs[i].name;
+    a["icon"] = appDefs[i].icon;
+    a["ready"] = appDefs[i].ready;
+  }
 
   // "metrics": the default PC's (older portals), "pcs": every known PC.
   JsonArray metrics = doc["metrics"].to<JsonArray>();

@@ -328,6 +328,10 @@ void dailyBarSync();
 void closeModal();
 void refreshModal();
 void openModal(int tileIdx);
+// Full-screen app (app.h) in the card slot: opens from and closes into its tile.
+void openApp(int tileIdx, const String& id);
+bool appShown();
+void appTick();
 void onConfirmOk(lv_event_t*);
 void openConfirm(int tileIdx, bool hold);
 void openPrinterErrors(const String& title, const PrinterState& s);

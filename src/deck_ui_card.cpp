@@ -1,6 +1,7 @@
 // Deck UI: toast, detail card, confirm card and the PC pairing card.
 #include "deck_ui_int.h"
 #include "deck_daily.h"
+#include "app.h"
 #include <src/misc/cache/instance/lv_image_cache.h>
 
 namespace deckui {
@@ -24,6 +25,10 @@ constexpr uint32_t CONFIRM_TIMEOUT_MS = 8000;
 constexpr uint32_t CONFIRM_ARM_MS = 400;  // a stray second tap must not confirm
 
 bool modalShown() { return s_modalCard != nullptr; }
+
+// The app open in the card slot, if any (see openApp).
+const app::Def* s_app = nullptr;
+bool appShown() { return s_app != nullptr; }
 
 // The page under a card, dimmed like the scrim, as an opaque picture on top of
 // the screen: LVGL skips the page under it while the card is open.
@@ -190,7 +195,70 @@ void deckToastShow(const char* text, uint32_t holdMs) {
   lv_anim_start(&out);
 }
 
+// --- Apps ------------------------------------------------------------------------
+// A detail card the size of the screen: header with "‹ Inicio" and the app's
+// name, the app's own view below. Same opening and closing animation as a card.
+constexpr int APP_HEADER_H = 48;
+void cleanPage();
+
+void onAppBack(lv_event_t*) { fxCardClose(s_modalCard, s_modalTile); }
+
+void openApp(int tileIdx, const String& id) {
+  const app::Def* a = app::find(id.c_str());
+  if (!a) {
+    deckToastShow("App desconocida", 1500);
+    return;
+  }
+  closeModal();
+  cleanPage();
+  const int w = logicalW(), h = logicalH();
+  s_modalTile = tileIdx;
+  fxCardOpenBegin(tileIdx, {0, 0, (int16_t)w, (int16_t)h}, 0);
+
+  s_modalScrim = makeScrim(false);
+  lv_obj_t* c = lv_obj_create(lv_layer_top());
+  s_modalCard = c;
+  lv_obj_remove_style_all(c);
+  lv_obj_set_size(c, w, h);
+  lv_obj_set_pos(c, 0, 0);
+  lv_obj_set_style_bg_color(c, lv_color_hex(C_BG), 0);
+  lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
+  if (s_theme == THEME_GLASS && (s_modalGlass = frostedCopy(0, 0, w, h, 0))) frostStyle(c, s_modalGlass);
+  lv_obj_set_style_text_color(c, lv_color_hex(C_TEXT), 0);
+  lv_obj_add_flag(c, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_remove_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* back = qpButton(c, 8, 6, 118, LV_SYMBOL_LEFT "  Inicio", false);
+  lv_obj_set_height(back, APP_HEADER_H - 12);
+  lv_obj_add_event_cb(back, onAppBack, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t* title = lv_label_create(c);
+  lv_label_set_text(title, a->name);
+  lv_obj_set_style_text_font(title, &deck_font_20, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(C_TITLE), 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, (APP_HEADER_H - lv_font_get_line_height(&deck_font_20)) / 2);
+
+  lv_obj_t* body = lv_obj_create(c);
+  lv_obj_remove_style_all(body);
+  lv_obj_set_pos(body, 0, APP_HEADER_H);
+  lv_obj_set_size(body, w, h - APP_HEADER_H);
+  lv_obj_remove_flag(body, LV_OBJ_FLAG_SCROLLABLE);
+
+  s_app = a;
+  setModalOpen(true);
+  a->open(body, w, h - APP_HEADER_H);
+  fxCardOpen(c, tileIdx);
+  coverFill();
+}
+
+void appTick() {
+  if (s_app && s_app->tick && s_modalCard) s_app->tick();
+}
+
 void closeModal() {
+  if (s_app) {
+    if (s_app->close) s_app->close();
+    s_app = nullptr;
+  }
   if (s_modalCard) lv_obj_delete(s_modalCard);
   if (s_modalScrim) lv_obj_delete(s_modalScrim);
   if (s_modalUnder) lv_obj_delete(s_modalUnder);
@@ -223,7 +291,7 @@ void onModalPrimary(lv_event_t*) {
 }
 
 void refreshModal() {
-  if (s_modalTile < 0 || !s_modalCard) return;
+  if (s_modalTile < 0 || !s_modalCard || s_app) return;
   const TileRt& r = s_tiles[s_modalTile];
   if (s_confirmHold >= 0) {
     // The state changed under the question: ask again.
