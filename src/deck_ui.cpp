@@ -327,6 +327,7 @@ void buildPages() {
   if (s_theme == THEME_GLASS) wallLoad(w, logicalH(), dispSettings.glassBlur, dispSettings.glassDim);
   else wallFree();
   s_count = 0;
+  for (TileRt& r : s_tiles) widgetFree(r);
   s_tiles.clear();
   s_zonesDirty = true;
   s_tiles.reserve(64);
@@ -435,6 +436,7 @@ void destroyPages(bool keepGlass = false) {
   }
   s_count = 0;
   for (TileRt& r : s_tiles) {
+    widgetFree(r);
     r.art.reset();
     if (r.pts) lv_free(r.pts);
     sparkFree(r.spark);
@@ -1048,6 +1050,7 @@ void deckTick() {
   presenceTick();
   frameTick();
   appTick();
+  widgetsTick();
 
   // System screens (splash, WiFi setup, OTA) cover the pages: no gestures,
   // no panel or card under them.

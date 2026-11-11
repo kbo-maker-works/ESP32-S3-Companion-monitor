@@ -2,6 +2,7 @@
 #pragma once
 #include "deck_ui.h"
 #include "deck_config.h"
+#include "widget.h"
 #include "deck_bambu.h"
 #include "deck_http.h"
 #include "deck_icons.h"
@@ -77,6 +78,8 @@ struct MediaArt {
 // One tile on screen. LVGL user data holds the index into s_tiles.
 struct TileRt {
   const TileDef* def;
+  const widget::Def* wdef;  // TILE_WIDGET: its widget and the widget's own state
+  void* wstate;
   int page;
   lv_obj_t* obj;
   lv_obj_t* name;
@@ -300,6 +303,9 @@ bool needsConfirm(const TileRt& r, const TileAction& a);
 const char* actionVerb(const TileRt& r, const TileAction& a);
 void requestAction(TileRt& r, bool hold);
 void tileEvent(lv_event_t* e);
+void widgetSizeEvent(lv_event_t* e);
+void widgetsTick();
+void widgetFree(TileRt& r);
 bool pcVolHeld();
 void pcVolumeTick();
 void sliderEvent(lv_event_t* e);

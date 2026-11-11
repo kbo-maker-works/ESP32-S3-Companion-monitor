@@ -2,6 +2,7 @@
 #include "deck_config.h"
 #include "deck_bambu.h"
 #include "app.h"
+#include "widget.h"
 #include "config.h"
 #include "psram_json.h"
 #include <ArduinoJson.h>
@@ -284,6 +285,7 @@ bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err)
       else if (!strcmp(tt, "clock")) t.type = TILE_CLOCK;
       else if (!strcmp(tt, "media")) t.type = TILE_MEDIA;
       else if (!strcmp(tt, "printer")) t.type = TILE_PRINTER;
+      else if (!strcmp(tt, "widget")) t.type = TILE_WIDGET;
       else {
         if (err) *err = where + ": unknown type '" + tt + "'";
         return false;
@@ -388,6 +390,20 @@ bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err)
         p.tiles.push_back(t);
         continue;  // built-in taps: light toggles, summary opens the printer page
       }
+      if (t.type == TILE_WIDGET) {
+        const widget::Def* wd = widget::find(tv["widget"] | "");
+        if (!wd) {
+          if (err) *err = where + ": unknown widget '" + (const char*)(tv["widget"] | "") + "'";
+          return false;
+        }
+        t.widget = wd->id;
+        t.variant = widget::variantOr(wd, tv["variant"] | "");
+        // A tap opens the widget's app unless the tile says otherwise
+        if (tv["tap"].isNull() && wd->app) {
+          t.tap.kind = ACT_APP;
+          t.tap.app = wd->app;
+        }
+      }
       if (t.type == TILE_SLIDER) {
         if (strcmp(tv["control"] | "", "pc-volume")) {
           if (err) *err = where + ": a slider needs \"control\": \"pc-volume\"";
@@ -396,7 +412,7 @@ bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err)
         t.pcVolume = true;
         t.pc = (const char*)(tv["pc"] | "");
       }
-      if (!parseAction(tv["tap"], t.tap, err, where + " tap")) return false;
+      if (!tv["tap"].isNull() && !parseAction(tv["tap"], t.tap, err, where + " tap")) return false;
       if (!parseAction(tv["hold"], t.hold, err, where + " hold")) return false;
       const char* cf = tv["confirm"] | "";
       if (!strcmp(cf, "off")) t.confirm = CONFIRM_OFF;

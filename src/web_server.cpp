@@ -23,6 +23,7 @@
 #include "psram_json.h"
 #include "crash_log.h"
 #include "app.h"
+#include "widget.h"
 #include "companion_settings.h"
 #include "flight_service.h"
 #include "weather_service.h"
@@ -288,6 +289,22 @@ static void handleApiConfig() {
     a["name"] = d->name;
     a["icon"] = d->icon;
     a["ready"] = d->ready;
+  }
+
+  // Widgets a tile can show, with their variants (first = default).
+  JsonArray widgets = doc["widgets"].to<JsonArray>();
+  for (size_t i = 0; i < widget::count(); i++) {
+    const widget::Def* d = widget::get(i);
+    JsonObject o = widgets.add<JsonObject>();
+    o["id"] = d->id;
+    o["name"] = d->name;
+    if (d->app) o["app"] = d->app;
+    JsonArray vs = o["variants"].to<JsonArray>();
+    for (uint8_t v = 0; v < d->variantCount; v++) {
+      JsonObject vo = vs.add<JsonObject>();
+      vo["id"] = d->variants[v].id;
+      vo["name"] = d->variants[v].name;
+    }
   }
 
   // "metrics": the default PC's (older portals), "pcs": every known PC.

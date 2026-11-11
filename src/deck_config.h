@@ -107,7 +107,7 @@ constexpr int ORIENT_PORTRAIT = 1;
 constexpr int MAX_DECK_PAGES = 8;
 constexpr int MAX_PAGE_TILES = 24;
 
-enum TileType : uint8_t { TILE_ACTION = 0, TILE_SENSOR, TILE_METRIC, TILE_SLIDER, TILE_CLOCK, TILE_PRINTER, TILE_MEDIA };
+enum TileType : uint8_t { TILE_ACTION = 0, TILE_SENSOR, TILE_METRIC, TILE_SLIDER, TILE_CLOCK, TILE_PRINTER, TILE_MEDIA, TILE_WIDGET };
 enum PrinterShow : uint8_t { PS_HERO = 0, PS_NOZZLE, PS_BED, PS_CHAMBER, PS_FILAMENT, PS_LAYER, PS_LIGHT, PS_AMS, PS_SLOTS, PS_SUMMARY };
 constexpr int MAX_PRINTERS = 2;
 enum MetricStyle : uint8_t { METRIC_NUMBER = 0, METRIC_CHART, METRIC_BAR };
@@ -185,6 +185,7 @@ struct TileDef {
   bool hasWarn = false, hasCrit = false;
   float warn = 0, crit = 0;
   uint16_t scaleMax = 0;  // 0 = full scale by unit (sensor rows: 100)
+  String widget, variant; // TILE_WIDGET: widget id (widget.h) and its variant
   String printer;         // TILE_PRINTER: printer id
   PrinterShow show = PS_HERO;
   uint8_t nozzle = 0;     // PS_NOZZLE: 0 = right / only, 1 = left

@@ -58,8 +58,33 @@ uint32_t showIcon(lv_obj_t* label, const TileDef& d, bool on, int px, uint32_t s
   return cp;
 }
 
+// --- Widgets (widget.h) -----------------------------------------------------------
+void widgetSizeEvent(lv_event_t* e) {
+  const size_t idx = (size_t)(uintptr_t)lv_event_get_user_data(e);
+  if (idx >= s_tiles.size()) return;
+  TileRt& r = s_tiles[idx];
+  if (!r.wdef || !r.wstate) return;
+  r.wdef->resize(r.wstate, lv_obj_get_content_width(r.obj), lv_obj_get_content_height(r.obj));
+  if (r.wdef->update(r.wstate)) markPageStale(r.page);
+}
+
+// Every loop: widgets refresh themselves (each one throttles its own work).
+void widgetsTick() {
+  for (TileRt& r : s_tiles)
+    if (r.wdef && r.wstate && r.wdef->update(r.wstate) && r.page != sh.active) markPageStale(r.page);
+}
+
+void widgetFree(TileRt& r) {
+  if (r.wdef && r.wstate) r.wdef->destroy(r.wstate);
+  r.wstate = nullptr;
+}
+
 String tileLabel(const TileDef& t) {
   if (t.label.length()) return t.label;
+  if (t.type == TILE_WIDGET) {
+    const widget::Def* w = widget::find(t.widget.c_str());
+    return w ? String(w->name) : String("Widget");
+  }
   if (t.type == TILE_CLOCK) return "Clock";
   if (t.type == TILE_MEDIA) return "Now playing";
   return t.id.length() ? t.id : String("Tile");
@@ -248,6 +273,29 @@ void makeTile(lv_obj_t* grid, const TileDef& def, int page, int col, int row, in
     applyMedia(s_tiles.back());
     lv_obj_add_event_cb(t, mediaEvent, LV_EVENT_SHORT_CLICKED, (void*)(uintptr_t)(idx * 4 + 3));
     lv_obj_add_event_cb(t, fitEvent, LV_EVENT_SIZE_CHANGED, (void*)(uintptr_t)idx);
+    return;
+  }
+
+  // Widget: its content, built by the widget (widget.h), in a centred column.
+  if (def.type == TILE_WIDGET) {
+    lv_obj_set_flex_flow(t, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(t, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(t, 2, 0);
+    TileRt r = {};
+    r.def = &def;
+    r.page = page;
+    r.obj = t;
+    r.wdef = widget::find(def.widget.c_str());
+    if (r.wdef) r.wstate = r.wdef->create(t, def.variant.c_str());
+    const size_t idx = s_tiles.size();
+    s_tiles.push_back(r);
+    if (def.tap.kind != ACT_NONE || def.hold.kind != ACT_NONE) {
+      lv_obj_add_event_cb(t, tileEvent, LV_EVENT_SHORT_CLICKED, (void*)(uintptr_t)idx);
+      lv_obj_add_event_cb(t, tileEvent, LV_EVENT_LONG_PRESSED, (void*)(uintptr_t)idx);
+    } else {
+      lv_obj_remove_flag(t, LV_OBJ_FLAG_CLICKABLE);
+    }
+    lv_obj_add_event_cb(t, widgetSizeEvent, LV_EVENT_SIZE_CHANGED, (void*)(uintptr_t)idx);
     return;
   }
 

@@ -92,17 +92,27 @@
       pcm = (c.metrics || []).slice().sort((a, b) => a.id - b.id);
       pcs = c.pcs || [];
       apps = c.apps || [];
+      widgets = c.widgets || [];
       if (!ori && c.display) ori = c.display.rotation % 2 ? "landscape" : "portrait";
     } catch (e) {
       pcm = [];
       pcs = [];
       apps = [];
+      widgets = [];
     }
   }
   /* Known PCs (first = default); a metric tile's PC and its metric list. */
   let pcs = [];
   /* Apps a tile can open: [{id, name, icon, ready}] from the firmware (app.cpp). */
   let apps = [];
+  /* Widgets a tile can show: [{id, name, app, variants: [{id, name}]}] (widget.cpp). */
+  let widgets = [];
+  const widgetOf = (t) => widgets.find((w) => w.id === t.widget) || null;
+  const widgetName = (t) => {
+    const w = widgetOf(t),
+      v = w && (w.variants.find((x) => x.id === t.variant) || w.variants[0]);
+    return w ? w.name + (v ? " · " + v.name : "") : "Widget " + (t.widget || "");
+  };
   const pcOf = (t) => pcs.find((x) => x.id === (t.pc || "")) || (!t.pc && pcs[0]) || null;
   const mlist = (t) => {
     const p = pcOf(t);
@@ -396,7 +406,7 @@
     if (wide) return '<div class="dk-grp wide">' + secH(title) + inner + "</div>";
     return '<div class="dk-grp flat" style="--t:&quot;' + title + '&quot;">' + inner + "</div>";
   }
-  const canOn = (t) => !["metric", "sensor", "clock", "media"].includes(t.type);
+  const canOn = (t) => !["metric", "sensor", "clock", "media", "widget"].includes(t.type);
   /* Colours, then the on state; icon colours sit with them, the icon's style in iconFields. */
   function colorField(t, i) {
     const tx = TXT.concat(SW),
@@ -847,6 +857,41 @@
         tiles: ams,
       },
     ];
+  }
+  /* Widget tile: which widget and its variant; a tap opens the widget's app. */
+  function widgetRow(t, i) {
+    const w = widgetOf(t);
+    return (
+      '<div class="dk-tile' +
+      (i === sel ? " sel" : "") +
+      '"><div class="dk-ic" style="background:' +
+      (t.color || "#34F5A0") +
+      '">W</div><div class="dk-tmain"><b>' +
+      esc(widgetName(t)) +
+      '</b><div class="dk-row" style="margin-top:4px"><select data-wg="' +
+      i +
+      '" style="width:auto">' +
+      widgets.map((x) => opt(x.id, x.name, x.id === t.widget)).join("") +
+      '</select><select data-wv="' +
+      i +
+      '" style="width:auto">' +
+      (w ? w.variants.map((v) => opt(v.id, v.name, v.id === t.variant)).join("") : "") +
+      "</select></div>" +
+      (w && w.app ? '<div class="dk-tsub">Al tocarlo abre la app ' + esc(w.app) + "</div>" : "") +
+      '</div><div class="dk-tact">' +
+      sizeSel(t, i) +
+      '<button type="button" class="btn' +
+      (i === more ? " on" : "") +
+      '" data-mo="' +
+      i +
+      '" title="More options">&#8943;</button><button type="button" class="btn" data-u="' +
+      i +
+      '" title="Move up">&#8593;</button><button type="button" class="btn" data-x="' +
+      i +
+      '" title="Remove">&#215;</button></div>' +
+      (i === more ? '<div class="dk-more">' + whenField(t, i) + "</div>" : "") +
+      "</div>"
+    );
   }
   function clockRow(t, i) {
     return (
@@ -1605,7 +1650,9 @@
         t.color ||
         (m ? PAL[((t.metric || 1) - 1) % 8] : ck ? "#E6E8EC" : pr ? "#F5B83D" : "#7DB5FF"),
       cp = m || ck || pr || np ? 0 : tileCp(t);
-    const nm = np
+    const nm = t.type === "widget"
+      ? widgetName(t)
+      : np
       ? "Now playing"
       : ck
         ? "Clock"
@@ -1943,6 +1990,7 @@
         .map((t, i) => {
           if (t.type === "metric") return metricRow(t, i);
           if (t.type === "clock") return clockRow(t, i);
+          if (t.type === "widget") return widgetRow(t, i);
           if (t.type === "media") return mediaRow(t, i);
           if (isPcVol(t)) return pcVolRow(t, i);
           if (t.type === "printer") return offT(t) ? "" : printerRow(t, i);
@@ -2001,7 +2049,7 @@
       +cells.toFixed(2) +
       " of " +
       c * r +
-      ' cells used</p><div class="dk-row" style="margin-top:12px"><button type="button" class="btn" id="dkAddApp">+ Add app</button><button type="button" class="btn" id="dkAddPc">+ Add PC metric</button><button type="button" class="btn" id="dkAddHttp">+ Add HTTP button</button><button type="button" class="btn" id="dkAddPcCmd">+ Add PC control</button><button type="button" class="btn" id="dkAddPcVol">+ Add PC volume</button><button type="button" class="btn" id="dkAddMedia">+ Add now playing</button><button type="button" class="btn" id="dkAddClock">+ Add clock</button><button type="button" class="btn" id="dkAddHttpSensor">+ Add HTTP sensor</button>' +
+      ' cells used</p><div class="dk-row" style="margin-top:12px"><button type="button" class="btn" id="dkAddApp">+ Add app</button><button type="button" class="btn" id="dkAddWidget">+ Add widget</button><button type="button" class="btn" id="dkAddPc">+ Add PC metric</button><button type="button" class="btn" id="dkAddHttp">+ Add HTTP button</button><button type="button" class="btn" id="dkAddPcCmd">+ Add PC control</button><button type="button" class="btn" id="dkAddPcVol">+ Add PC volume</button><button type="button" class="btn" id="dkAddMedia">+ Add now playing</button><button type="button" class="btn" id="dkAddClock">+ Add clock</button><button type="button" class="btn" id="dkAddHttpSensor">+ Add HTTP sensor</button>' +
       (prnOn() && (deck.printers || []).length
         ? '<button type="button" class="btn" id="dkAddPrinter">+ Add printer tile</button>'
         : "") +
@@ -2433,6 +2481,34 @@
         else delete p.auto;
         setDirty(true);
       };
+    $("dkAddWidget").onclick = () => {
+      if (!widgets.length) return;
+      const w = widgets[0];
+      p.tiles.push({ id: "w" + Date.now().toString(36), type: "widget", widget: w.id, variant: w.variants[0].id });
+      more = -1;
+      setDirty(true);
+      renderPage();
+    };
+    el.querySelectorAll("[data-wg]").forEach(
+      (x) =>
+        (x.onchange = (e) => {
+          const t = p.tiles[+x.dataset.wg],
+            w = widgets.find((y) => y.id === e.target.value);
+          if (!w) return;
+          t.widget = w.id;
+          t.variant = w.variants[0].id;
+          setDirty(true);
+          renderPage();
+        }),
+    );
+    el.querySelectorAll("[data-wv]").forEach(
+      (x) =>
+        (x.onchange = (e) => {
+          p.tiles[+x.dataset.wv].variant = e.target.value;
+          setDirty(true);
+          renderPage();
+        }),
+    );
     $("dkAddApp").onclick = () => {
       if (!apps.length) return;
       const t = { id: "a" + Date.now().toString(36), type: "action" };

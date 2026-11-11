@@ -275,6 +275,17 @@ void pickBuild() {
     it.def.tap.app = a->id;
     s_pickItems.push_back(it);
   }
+  for (size_t i = 0; i < widget::count(); i++) {
+    const widget::Def* w = widget::get(i);
+    for (uint8_t v = 0; v < w->variantCount; v++) {
+      PickItem it = {"Widgets", TileDef(), false};
+      it.def.type = TILE_WIDGET;
+      it.def.widget = w->id;
+      it.def.variant = w->variants[v].id;
+      it.def.label = String(w->name) + " · " + w->variants[v].name;  // picker text only
+      s_pickItems.push_back(it);
+    }
+  }
   PickItem clock = {"Otros", TileDef(), false};
   clock.def.type = TILE_CLOCK;
   clock.def.label = "Reloj";
@@ -590,6 +601,10 @@ bool edBuild(String& out, String& err) {
     tv["id"] = d.id;
     if (d.type == TILE_CLOCK) {
       tv["type"] = "clock";
+    } else if (d.type == TILE_WIDGET) {
+      tv["type"] = "widget";
+      tv["widget"] = d.widget;
+      tv["variant"] = d.variant;
     } else {
       tv["type"] = "action";
       tv["label"] = d.label;
