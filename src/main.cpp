@@ -17,6 +17,8 @@
 #include "crash_log.h"
 #include "deck_daily.h"
 #include "deck_sd.h"
+#include "companion_settings.h"
+#include "flight_service.h"
 
 // Loop-task watchdog: an indefinite block in loop() panics after
 // WDT_TIMEOUT_S with a backtrace and reboots (/api/status then reports
@@ -40,6 +42,7 @@ void setup() {
   heap_caps_malloc_extmem_enable(128);
 
   loadSettings();
+  companion::load();
   deck::wallStorageBegin();
   setScreenState(SCREEN_SPLASH);
   initDisplay();
@@ -54,6 +57,7 @@ void setup() {
   initWiFi();                     // blocks until STA connects or AP comes up
   initWebServer();
   pcMetricsBegin();
+  flights::begin();               // idle until the radar app opens
   initLed();
   initHaptic();
   audioInit();

@@ -22,6 +22,8 @@
 #include "psram_json.h"
 #include "crash_log.h"
 #include "app.h"
+#include "companion_settings.h"
+#include "flight_service.h"
 #include <LittleFS.h>
 #include <WebServer.h>
 #include <ArduinoJson.h>
@@ -264,16 +266,26 @@ static void handleApiConfig() {
   network["subnet"] = netSettings.subnet;
   network["dns"] = netSettings.dns;
 
+  // The companion apps' own settings (Apps page).
+  {
+    const companion::Settings& cs = companion::settings();
+    JsonObject cp = doc["companion"].to<JsonObject>();
+    cp["city"] = cs.city;
+    cp["lat"] = cs.lat;
+    cp["lon"] = cs.lon;
+    cp["radarKm"] = cs.radarKm;
+    cp["radarGnd"] = cs.radarGnd;
+  }
+
   // Apps a tile can open ("On tap > App" in the tile editor).
   JsonArray apps = doc["apps"].to<JsonArray>();
-  size_t appCount = 0;
-  const app::Def* appDefs = app::all(appCount);
-  for (size_t i = 0; i < appCount; i++) {
+  for (size_t i = 0; i < app::count(); i++) {
+    const app::Def* d = app::get(i);
     JsonObject a = apps.add<JsonObject>();
-    a["id"] = appDefs[i].id;
-    a["name"] = appDefs[i].name;
-    a["icon"] = appDefs[i].icon;
-    a["ready"] = appDefs[i].ready;
+    a["id"] = d->id;
+    a["name"] = d->name;
+    a["icon"] = d->icon;
+    a["ready"] = d->ready;
   }
 
   // "metrics": the default PC's (older portals), "pcs": every known PC.
@@ -1207,6 +1219,47 @@ static void handleSaveClock() {
   configTzTime(netSettings.timezoneStr, "pool.ntp.org", "time.nist.gov");
   refreshBacklightControl();
   sendJsonMessage(200, true, "Time settings applied.");
+}
+
+// POST /save/apps - location and radar (companion_settings).
+static void handleSaveApps() {
+  companion::Settings next = companion::settings();
+  if (server.hasArg("city")) {
+    next.city = server.arg("city");
+    next.city.trim();
+  }
+  if (server.hasArg("lat") || server.hasArg("lon")) {
+    String lat = server.arg("lat"), lon = server.arg("lon");
+    lat.trim();
+    lon.trim();
+    lat.replace(',', '.');
+    lon.replace(',', '.');
+    const float la = lat.toFloat(), lo = lon.toFloat();
+    // toFloat() gives 0 for text: only "0" itself may be zero
+    const bool okLa = la >= -90 && la <= 90 && (la != 0 || lat == "0" || lat.startsWith("0.")),
+               okLo = lo >= -180 && lo <= 180 && (lo != 0 || lon == "0" || lon.startsWith("0."));
+    if (!okLa || !okLo) {
+      sendJsonMessage(400, false, "Latitud o longitud no válida.");
+      return;
+    }
+    next.lat = lat;
+    next.lon = lon;
+  }
+  if (server.hasArg("radarKm")) {
+    const int km = server.arg("radarKm").toInt();
+    if (!companion::validRadarKm(km)) {
+      sendJsonMessage(400, false, "Radio no válido.");
+      return;
+    }
+    next.radarKm = (uint8_t)km;
+  }
+  if (server.hasArg("radarGnd")) next.radarGnd = (uint8_t)constrain(server.arg("radarGnd").toInt(), 0, 2);
+  const bool moved = next.lat != companion::settings().lat || next.lon != companion::settings().lon ||
+                     next.radarKm != companion::settings().radarKm;
+  companion::settings() = next;
+  companion::save();
+  if (moved) flights::refreshSoon();
+  sendJsonMessage(200, true, "Ajustes de apps guardados.");
 }
 
 static void handleFactoryReset() {
@@ -2335,6 +2388,7 @@ void initWebServer() {
   server.on("/api/audio/upload", HTTP_POST, handleAudioUploadFinish, handleAudioUpload);
   server.on("/api/audio/delete", HTTP_POST, handleAudioDelete);
   server.on("/save/clock", HTTP_POST, handleSaveClock);
+  server.on("/save/apps", HTTP_POST, handleSaveApps);
   server.on("/save/network", HTTP_POST, handleSaveNetwork);
   server.on("/api/config", HTTP_GET, handleApiConfig);
   server.on("/api/config/export", HTTP_GET, handleConfigExport);

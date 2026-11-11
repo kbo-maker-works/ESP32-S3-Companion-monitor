@@ -1,5 +1,6 @@
 // App registry and the simple apps. See app.h.
 #include "app.h"
+#include "app_radar.h"
 #include "deck_ui_int.h"
 #include "config.h"
 #include <WiFi.h>
@@ -114,28 +115,27 @@ void tickInfo() {
 
 void closeInfo() { s_qr = nullptr; }
 
+const Def kIa = {"ia", "IA", "mdi:robot-outline", false, openSoon, nullptr, nullptr};
+const Def kSistema = {"sistema", "Sistema", "mdi:chip", false, openSoon, nullptr, nullptr};
+const Def kRed = {"red", "Red", "mdi:lan", false, openSoon, nullptr, nullptr};
+const Def kAudio = {"audio", "Audio", "mdi:speaker", false, openSoon, nullptr, nullptr};
+const Def kAjustes = {"ajustes", "Ajustes", "mdi:cog-outline", true, openInfo, tickInfo, closeInfo};
+
 // --- Registry ------------------------------------------------------------------
-// Order = order in the portal's app list.
-const Def kApps[] = {
-    {"ia", "IA", "mdi:robot-outline", false, openSoon, nullptr, nullptr},
-    {"sistema", "Sistema", "mdi:chip", false, openSoon, nullptr, nullptr},
-    {"red", "Red", "mdi:lan", false, openSoon, nullptr, nullptr},
-    {"radar", "Radar", "mdi:radar", false, openSoon, nullptr, nullptr},
-    {"audio", "Audio", "mdi:speaker", false, openSoon, nullptr, nullptr},
-    {"ajustes", "Ajustes", "mdi:cog-outline", true, openInfo, tickInfo, closeInfo},
-};
+// Order = order in the portal's app list. Apps in their own file (app_radar.cpp)
+// export their Def through a header.
+const Def* const kApps[] = {&kIa, &kSistema, &kRed, &kRadar, &kAudio, &kAjustes};
+constexpr size_t kAppCount = sizeof(kApps) / sizeof(kApps[0]);
 
 }  // namespace
 
 const Def* find(const char* id) {
-  for (const Def& d : kApps)
-    if (!strcmp(d.id, id)) return &d;
+  for (const Def* d : kApps)
+    if (!strcmp(d->id, id)) return d;
   return nullptr;
 }
 
-const Def* all(size_t& count) {
-  count = sizeof(kApps) / sizeof(kApps[0]);
-  return kApps;
-}
+const Def* get(size_t i) { return i < kAppCount ? kApps[i] : nullptr; }
+size_t count() { return kAppCount; }
 
 }  // namespace app

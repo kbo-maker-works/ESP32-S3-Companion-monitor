@@ -134,7 +134,8 @@
               </button
               ><button type="button" class="nav-item hidden" data-nav="printers" id="navPrinters">
                 Printers
-              </button>
+              </button
+              ><button type="button" class="nav-item" data-nav="apps">Apps</button>
             </div>
             <div class="nav-group">
               <div class="nav-label">Configuration</div>
@@ -1265,6 +1266,73 @@
                       to start, so 3.3 V is not enough for VCC.</span
                     >
                   </div>
+                </div>
+              </form>
+            </section>
+
+            <section class="page" data-page="apps">
+              <div class="page-header">
+                <h1 class="page-h1">Apps</h1>
+                <p class="page-lede">
+                  Ajustes de las apps del companion. Las apps se colocan en Pages &amp; tiles con "+ Add app".
+                </p>
+              </div>
+              <form id="appsForm" class="portal-form" data-endpoint="/save/apps" data-save-label="Guardar">
+                <div class="card">
+                  <h2 class="card-title">Ubicación</h2>
+                  <p class="field-hint" style="margin-top:0">Centro del radar.</p>
+                  <div class="field">
+                    <label class="field-label" for="citySearch">Buscar ciudad</label>
+                    <div style="display:flex;gap:8px">
+                      <input type="text" id="citySearch" placeholder="Madrid, Sevilla..." autocomplete="off" />
+                      <button type="button" class="btn" id="citySearchBtn">Buscar</button>
+                    </div>
+                    <div id="cityResults" class="field-hint"></div>
+                  </div>
+                  <div class="grid-2">
+                    <div class="field">
+                      <label class="field-label" for="city">Nombre</label>
+                      <input type="text" id="city" name="city" maxlength="40" />
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="lat">Latitud</label>
+                      <input type="text" id="lat" name="lat" inputmode="decimal" maxlength="12" />
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="lon">Longitud</label>
+                      <input type="text" id="lon" name="lon" inputmode="decimal" maxlength="12" />
+                    </div>
+                  </div>
+                </div>
+                <div class="card">
+                  <h2 class="card-title">Radar de vuelos</h2>
+                  <div class="grid-2">
+                    <div class="field">
+                      <label class="field-label" for="radarKm">Radio</label>
+                      <div class="select-wrap">
+                        <select id="radarKm" name="radarKm">
+                          <option value="10">10 km</option>
+                          <option value="25">25 km</option>
+                          <option value="50">50 km</option>
+                          <option value="100">100 km</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="radarGnd">Mostrar</label>
+                      <div class="select-wrap">
+                        <select id="radarGnd" name="radarGnd">
+                          <option value="0">En vuelo</option>
+                          <option value="1">En tierra</option>
+                          <option value="2">Todos</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  <p class="field-hint">
+                    Datos de adsb.lol, cada 12 s mientras el radar está abierto. En la pantalla el radio se cambia
+                    tocando "RADIO" y el filtro con el botón del panel.
+                  </p>
                 </div>
               </form>
             </section>

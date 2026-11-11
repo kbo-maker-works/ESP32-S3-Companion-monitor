@@ -528,6 +528,12 @@
       setVal("prnCoolTemp", pr.coolTemp || 35);
     }
     if (window.dkPrnSync) window.dkPrnSync();
+    const cp = c.companion || {};
+    setVal("city", cp.city || "");
+    setVal("lat", cp.lat || "");
+    setVal("lon", cp.lon || "");
+    setVal("radarKm", cp.radarKm || 25);
+    setVal("radarGnd", cp.radarGnd || 0);
     setVal("timeFormat", c.clock.use24h ? "24" : "12");
     setVal("timezone", c.clock.timezone || "");
     const tz = qa("#timezonePreset option").find((o) => o.value === (c.clock.timezone || ""));
@@ -598,6 +604,45 @@
     }
   }
   $("saveBtn").addEventListener("click", saveActive);
+
+  /* Apps: city search with Open-Meteo's geocoder, from this browser (the deck needs no internet for it). */
+  async function citySearch() {
+    const q = $("citySearch").value.trim(),
+      out = $("cityResults");
+    if (!q) return;
+    out.textContent = "Buscando...";
+    try {
+      const r = await fetch(
+        "https://geocoding-api.open-meteo.com/v1/search?count=6&language=es&name=" + encodeURIComponent(q),
+      );
+      const list = ((await r.json()).results || []).filter((x) => x.latitude != null);
+      out.textContent = list.length ? "" : "Sin resultados";
+      list.forEach((x) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "chip";
+        b.style.margin = "6px 6px 0 0";
+        b.textContent = [x.name, x.admin1, x.country].filter(Boolean).join(", ");
+        b.onclick = () => {
+          setVal("city", x.name);
+          setVal("lat", x.latitude.toFixed(4));
+          setVal("lon", x.longitude.toFixed(4));
+          $("appsForm").dispatchEvent(new Event("input"));
+          out.textContent = "";
+        };
+        out.appendChild(b);
+      });
+    } catch (e) {
+      out.textContent = "Sin internet en este navegador: escribe latitud y longitud a mano";
+    }
+  }
+  $("citySearchBtn").addEventListener("click", citySearch);
+  $("citySearch").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      citySearch();
+    }
+  });
   $("revertBtn").addEventListener("click", loadConfig);
 
   function pcStatusText(code) {

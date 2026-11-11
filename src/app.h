@@ -29,7 +29,9 @@ struct Def {
 };
 
 const Def* find(const char* id);
-const Def* all(size_t& count);
+// The registered apps, in portal order: get(0) .. get(count() - 1).
+size_t count();
+const Def* get(size_t i);
 
 }  // namespace app
 
