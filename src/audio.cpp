@@ -578,7 +578,7 @@ void audioStop() {
   portEXIT_CRITICAL(&s_mux);
 }
 
-const char* audioDir() { return deck::wallOnSd() ? "/touchdeck/sound" : "/sound"; }
+const char* audioDir() { return deck::wallOnSd() ? SD_ROOT "/sonidos" : "/sound"; }
 
 bool audioValidName(const String& n) {
   if (n.length() < 5 || n.length() >= AUDIO_FILE_LEN || !n.endsWith(".wav")) return false;

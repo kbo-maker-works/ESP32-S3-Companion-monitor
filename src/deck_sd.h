@@ -6,6 +6,9 @@
 #include <esp_heap_caps.h>
 #include <vector>
 
+// Root of everything the deck keeps on the microSD card (layout in deck_sd.cpp).
+#define SD_ROOT "/companion"
+
 namespace deck {
 
 template <typename T> struct WallAllocator {

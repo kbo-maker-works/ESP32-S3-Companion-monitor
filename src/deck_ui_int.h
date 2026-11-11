@@ -45,6 +45,11 @@ constexpr int GLASS_BORDER_WIDTH = 1;
 struct Page {
   lv_obj_t* root;
   lv_obj_t* title;
+  lv_obj_t* bar;     // right side of the header: weather, PC, cloud, WiFi, clock
+  lv_obj_t* wIcon;   // weather icon (needs the MDI font)
+  lv_obj_t* wTemp;   // temperature
+  lv_obj_t* pc;      // a PC companion is connected
+  lv_obj_t* cloud;   // internet reachable (the weather API answers)
   lv_obj_t* clock;
   lv_obj_t* wifi;
   lv_obj_t* grid;

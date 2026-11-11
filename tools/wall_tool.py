@@ -9,8 +9,9 @@ and saved as baseline JPEG with 8-hex names, the format the deck expects.
   upload DIR HOST     send DIR/l and DIR/p to the deck's own gallery over WiFi
                       (--daily: DIR/dl, DIR/dp into the daily archive)
 
-Copy OUT's folders to the microSD card under /touchdeck/wall/ (l, p = own
-pictures, dl, dp = daily archive), or use "upload". Needs Pillow.
+Copy OUT's folders to the microSD card, or use "upload": l -> /companion/fondos,
+p -> /companion/fondos-vertical, dl -> /companion/diarias, dp ->
+/companion/diarias-vertical (layout in src/deck_sd.cpp). Needs Pillow.
 """
 import argparse
 import io

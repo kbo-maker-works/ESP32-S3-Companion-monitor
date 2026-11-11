@@ -21,12 +21,19 @@ const char* iconSymbol(const TileDef& t) {
     {"console", LV_SYMBOL_KEYBOARD}, {"volume-high", LV_SYMBOL_VOLUME_MAX},
     {"volume-off", LV_SYMBOL_MUTE}, {"wifi", LV_SYMBOL_WIFI}, {"cog", LV_SYMBOL_SETTINGS},
     {"bell", LV_SYMBOL_BELL}, {"home", LV_SYMBOL_HOME},
+    // Companion apps (app.cpp) and their usual icons
+    {"radar", LV_SYMBOL_GPS}, {"map-marker", LV_SYMBOL_GPS}, {"airplane", LV_SYMBOL_GPS},
+    {"lan", LV_SYMBOL_WIFI}, {"network", LV_SYMBOL_WIFI}, {"chip", LV_SYMBOL_DRIVE},
+    {"memory", LV_SYMBOL_DRIVE}, {"robot-outline", LV_SYMBOL_CHARGE}, {"robot", LV_SYMBOL_CHARGE},
+    {"cog-outline", LV_SYMBOL_SETTINGS}, {"tune", LV_SYMBOL_SETTINGS}, {"usb", LV_SYMBOL_USB},
+    {"folder", LV_SYMBOL_DIRECTORY}, {"music", LV_SYMBOL_AUDIO}, {"cloud", LV_SYMBOL_UPLOAD},
   };
   String name = t.icon;
   if (name.startsWith("mdi:")) name = name.substring(4);
   for (const Map& m : kMap)
     if (name == m.name) return m.sym;
-  return LV_SYMBOL_POWER;
+  // Unknown: an arrow ("opens something"), never a power symbol that reads as on/off
+  return LV_SYMBOL_RIGHT;
 }
 
 // Puts a tile's icon on a label: the tile's own MDI icon, else a default; an

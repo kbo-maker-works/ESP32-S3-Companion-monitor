@@ -362,16 +362,41 @@ fs::FS& wallFs() {
   deckFsReady();
   return LittleFS;
 }
-const char* wallRoot() { return s_mounted ? "/touchdeck/wall" : "/wall"; }
+// TouchDeck's own layout (/touchdeck/...) moves to ours on the first mount
+// with a card that has it: folder renames only, nothing is copied or deleted,
+// and a folder already in place is left alone.
+static void sdMigrate() {
+  static const char* const kMoves[][2] = {
+      {"/touchdeck/wall/l", SD_ROOT "/fondos"},          {"/touchdeck/wall/p", SD_ROOT "/fondos-vertical"},
+      {"/touchdeck/wall/dl", SD_ROOT "/diarias"},        {"/touchdeck/wall/dp", SD_ROOT "/diarias-vertical"},
+      {"/touchdeck/icons", SD_ROOT "/iconos"},           {"/touchdeck/sound", SD_ROOT "/sonidos"},
+  };
+  if (!s_fs.exists("/touchdeck")) return;
+  if (!s_fs.exists(SD_ROOT)) s_fs.mkdir(SD_ROOT);
+  for (const auto& m : kMoves) {
+    if (!s_fs.exists(m[0]) || s_fs.exists(m[1])) continue;
+    const bool ok = s_fs.rename(m[0], m[1]);
+    Serial.printf("Deck: SD %s -> %s %s\n", m[0], m[1], ok ? "moved" : "FAILED");
+  }
+}
+
+// microSD layout (everything of the deck under /companion, see sdMigrate):
+//   /companion/fondos, /companion/fondos-vertical      own pictures (landscape, portrait)
+//   /companion/diarias, /companion/diarias-vertical    daily Spotlight pictures
+//   /companion/iconos                                  brand icon font (deck_icons.cpp)
+//   /companion/sonidos                                 sounds (audio.cpp)
+// Sibling folders, not nested ones: a gallery never lists another one's folder.
+// Internal storage (no card) keeps TouchDeck's /wall layout.
+const char* wallRoot() { return s_mounted ? SD_ROOT : "/wall"; }
 const char* wallTemp(bool daily) {
-  return s_mounted ? (daily ? "/touchdeck/wall/daily.up" : "/touchdeck/wall/upload.up")
+  return s_mounted ? (daily ? SD_ROOT "/diaria.up" : SD_ROOT "/subida.up")
                    : (daily ? "/wall/daily.up" : "/wall.up");
 }
 
 const char* wallDir(bool portrait, bool daily) {
   if (s_mounted)
-    return daily ? (portrait ? "/touchdeck/wall/dp" : "/touchdeck/wall/dl")
-                 : (portrait ? "/touchdeck/wall/p" : "/touchdeck/wall/l");
+    return daily ? (portrait ? SD_ROOT "/diarias-vertical" : SD_ROOT "/diarias")
+                 : (portrait ? SD_ROOT "/fondos-vertical" : SD_ROOT "/fondos");
   return daily ? (portrait ? "/wall/dp" : "/wall/dl") : (portrait ? "/wall/p" : "/wall/l");
 }
 
@@ -416,8 +441,8 @@ void wallStorageBegin() {
   if (!card) return;
   s_impl->mountpoint("/sd");
   s_mounted = true;
-  bool ok = (s_fs.exists("/touchdeck") || s_fs.mkdir("/touchdeck")) &&
-            (s_fs.exists(wallRoot()) || s_fs.mkdir(wallRoot()));
+  sdMigrate();
+  bool ok = s_fs.exists(wallRoot()) || s_fs.mkdir(wallRoot());
   for (int p = 0; p < 2; p++)
     for (int d = 0; d < 2; d++) ok &= s_fs.exists(wallDir(p, d)) || s_fs.mkdir(wallDir(p, d));
   if (!ok) {

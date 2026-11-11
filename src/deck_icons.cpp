@@ -36,7 +36,7 @@ Sized s_brandFonts[MAX_FONTS] = {};
 lv_fs_drv_t s_brandDrv;
 bool s_brandReg = false;
 constexpr uint32_t BRAND_BASE = 0x100000;
-const char* const BRAND_PENDING = "/touchdeck/icons/cbi.pending";
+const char* const BRAND_PENDING = SD_ROOT "/iconos/cbi.pending";
 
 struct BrandData {
   char* names = nullptr;
@@ -520,8 +520,8 @@ bool iconsReady() { return s_index != nullptr; }
 size_t iconsCount() { return s_count; }
 size_t iconsFileSize() { return s_size; }
 
-const char* brandFontPath() { return "/touchdeck/icons/cbi.otf"; }
-const char* brandNamesPath() { return "/touchdeck/icons/cbi.names"; }
+const char* brandFontPath() { return SD_ROOT "/iconos/cbi.otf"; }
+const char* brandNamesPath() { return SD_ROOT "/iconos/cbi.names"; }
 bool brandReady() { return s_brand.offsets != nullptr; }
 size_t brandCount() { return s_brand.count; }
 size_t brandFileSize() { return s_brand.size; }
@@ -646,7 +646,7 @@ const lv_font_t* iconFont(int px, uint32_t cp) {
   lv_font_t* mdi = s_index ? sizedFont(s_fonts, "I:/mdi.ttf", px) : nullptr;
   if (cp < BRAND_BASE) return mdi;
   // Brand sizes open only where a brand icon is shown: each one holds a file on the card.
-  lv_font_t* brand = brandReady() ? sizedFont(s_brandFonts, "B:/touchdeck/icons/cbi.otf", px) : nullptr;
+  lv_font_t* brand = brandReady() ? sizedFont(s_brandFonts, "B:" SD_ROOT "/iconos/cbi.otf", px) : nullptr;
   if (!brand) return nullptr;
   if (!mdi) return brand;
   mdi->fallback = brand;

@@ -19,6 +19,7 @@
 #include "deck_sd.h"
 #include "companion_settings.h"
 #include "flight_service.h"
+#include "weather_service.h"
 
 // Loop-task watchdog: an indefinite block in loop() panics after
 // WDT_TIMEOUT_S with a backtrace and reboots (/api/status then reports
@@ -58,6 +59,7 @@ void setup() {
   initWebServer();
   pcMetricsBegin();
   flights::begin();               // idle until the radar app opens
+  weather::begin();               // header weather, every 10 min
   initLed();
   initHaptic();
   audioInit();

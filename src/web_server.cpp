@@ -17,6 +17,7 @@
 #include "deck_http.h"
 #include "deck_icons.h"
 #include "deck_wall.h"
+#include "deck_sd.h"
 #include "deck_daily.h"
 #include "deck_sys.h"
 #include "psram_json.h"
@@ -24,6 +25,7 @@
 #include "app.h"
 #include "companion_settings.h"
 #include "flight_service.h"
+#include "weather_service.h"
 #include <LittleFS.h>
 #include <WebServer.h>
 #include <ArduinoJson.h>
@@ -1002,7 +1004,7 @@ static void handleAudioUpload() {
     if (!deck::wallOnSd() && !deck::deckFsReady()) audioUploadError = "file system not available";
     else if (!audioValidName(server.arg("n"))) audioUploadError = "the name must be letters, digits, - _ . and end in .wav";
     else {
-      if (deck::wallOnSd()) deck::wallFs().mkdir("/touchdeck");
+      if (deck::wallOnSd()) deck::wallFs().mkdir(SD_ROOT);
       deck::wallFs().mkdir(audioDir());
       deck::wallFs().remove(audioUploadPath());
       audioUploadRoom = deck::wallFreeBytes();
@@ -1254,11 +1256,12 @@ static void handleSaveApps() {
     next.radarKm = (uint8_t)km;
   }
   if (server.hasArg("radarGnd")) next.radarGnd = (uint8_t)constrain(server.arg("radarGnd").toInt(), 0, 2);
-  const bool moved = next.lat != companion::settings().lat || next.lon != companion::settings().lon ||
-                     next.radarKm != companion::settings().radarKm;
+  const bool located = next.lat != companion::settings().lat || next.lon != companion::settings().lon;
+  const bool moved = located || next.radarKm != companion::settings().radarKm;
   companion::settings() = next;
   companion::save();
   if (moved) flights::refreshSoon();
+  if (located) weather::refreshSoon();
   sendJsonMessage(200, true, "Ajustes de apps guardados.");
 }
 
@@ -1597,8 +1600,8 @@ static void handleIconsFinish() {
 }
 
 // --- Brand icons (CFF font and sorted names on microSD) -------------------------
-static const char* const BRAND_FONT_UPLOAD = "/touchdeck/icons/cbi.otf.up";
-static const char* const BRAND_NAMES_UPLOAD = "/touchdeck/icons/cbi.names.up";
+static const char* const BRAND_FONT_UPLOAD = SD_ROOT "/iconos/cbi.otf.up";
+static const char* const BRAND_NAMES_UPLOAD = SD_ROOT "/iconos/cbi.names.up";
 static File brandUpload;
 static String brandError;
 static unsigned brandParts = 0, brandSeen = 0, brandComplete = 0, brandPart = 0;
@@ -1644,8 +1647,8 @@ static void handleBrandUpload() {
       brandUploadCleanup();
       if (!deck::wallOnSd()) brandError = "brand icons need a microSD card";
       else {
-        deck::wallFs().mkdir("/touchdeck");
-        deck::wallFs().mkdir("/touchdeck/icons");
+        deck::wallFs().mkdir(SD_ROOT);
+        deck::wallFs().mkdir(SD_ROOT "/iconos");
       }
     }
     brandParts++;

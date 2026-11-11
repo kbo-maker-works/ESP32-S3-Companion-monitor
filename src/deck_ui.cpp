@@ -1,5 +1,6 @@
 // Guition JC3248W535 deck UI. See deck_ui.h for the threading contract.
 #include "deck_ui_int.h"
+#include "weather_service.h"
 #include <src/misc/lv_anim_private.h>  // lv_anim_enable_vsync_mode
 
 namespace deckui {
@@ -75,6 +76,7 @@ uint32_t s_panelSnapMs = 0;
 uint32_t s_lastClockCheck = 0;
 int s_lastMinute = -1;
 int s_lastWifi = -1;
+uint32_t s_statusKey = UINT32_MAX;  // weather / PC / cloud as last shown in the headers
 uint32_t s_lastStats = 0;
 uint32_t s_waitTimeouts = 0;
 uint32_t s_snapUsMax = 0;
@@ -188,7 +190,7 @@ void layoutHeader(Page& p) {
   if (!p.grid) return;
   s_zonesDirty = true;
   const int w = logicalW(), h = logicalH();
-  for (lv_obj_t* o : {p.title, p.clock, p.wifi}) {
+  for (lv_obj_t* o : {p.title, p.bar}) {
     if (s_header) lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
   }
@@ -253,14 +255,32 @@ void addTilesPage(const PageDef& def) {
   lv_obj_set_style_text_font(t, &deck_font_20, 0);
   lv_obj_set_style_text_color(t, lv_color_hex(C_TITLE), 0);
   lv_obj_set_pos(t, 12, 5);
-  p.clock = lv_label_create(p.root);
-  lv_label_set_text(p.clock, "");
-  lv_obj_set_style_text_color(p.clock, lv_color_hex(C_CLOCK), 0);
-  lv_obj_align(p.clock, LV_ALIGN_TOP_RIGHT, -12, 8);
-  p.wifi = lv_label_create(p.root);
-  lv_label_set_text(p.wifi, LV_SYMBOL_WIFI);
-  lv_obj_set_style_text_color(p.wifi, lv_color_hex(C_DIM), 0);
-  lv_obj_align(p.wifi, LV_ALIGN_TOP_RIGHT, -62, 8);
+  // Right side, laid out as a row from the right edge: weather, PC, cloud, WiFi, clock.
+  // Indicators that have nothing to say stay hidden and take no room.
+  p.bar = lv_obj_create(p.root);
+  lv_obj_remove_style_all(p.bar);
+  lv_obj_set_size(p.bar, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(p.bar, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(p.bar, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(p.bar, 9, 0);
+  lv_obj_remove_flag(p.bar, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_remove_flag(p.bar, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_align(p.bar, LV_ALIGN_TOP_RIGHT, -12, 8);
+  auto barLabel = [&](const char* text, uint32_t color) {
+    lv_obj_t* l = lv_label_create(p.bar);
+    lv_label_set_text(l, text);
+    lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+    return l;
+  };
+  p.wIcon = barLabel("", C_CLOCK);
+  lv_obj_set_style_pad_right(p.wIcon, -5, 0);  // icon and temperature read as one
+  p.wTemp = barLabel("", C_CLOCK);
+  p.pc = barLabel(LV_SYMBOL_USB, C_OK);
+  p.cloud = barLabel(LV_SYMBOL_UPLOAD, C_OK);
+  p.wifi = barLabel(LV_SYMBOL_WIFI, C_DIM);
+  p.clock = barLabel("", C_CLOCK);
+  for (lv_obj_t* o : {p.wIcon, p.wTemp, p.pc, p.cloud}) lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+  s_statusKey = UINT32_MAX;  // fill the new page's indicators on the next check
 
   // Two tracks per cell: tiles sit and span in half cells. Static descriptor
   // arrays per page (LVGL keeps the pointers).
@@ -384,6 +404,7 @@ void buildPages() {
   Serial.printf("Deck: glass %u baked, %u reused, %lu ms\n", baked, reused, (unsigned long)bakeMs);
   s_lastMinute = -1;
   s_lastWifi = -1;
+  s_statusKey = UINT32_MAX;
   buildQuickPanel();
   bindTiles();
 }
@@ -641,6 +662,60 @@ void blinkClocks() {
   }
 }
 
+// Header weather, PC and cloud indicators (part of updateHeaders).
+void updateStatus() {
+  const weather::Data wd = weather::get();
+  const bool pc = pcAnyOnline(), icons = iconsReady();
+  const uint32_t key = wd.seq << 3 | (pc ? 1 : 0) | (icons ? 2 : 0) | (wd.failing ? 4 : 0);
+  if (key == s_statusKey) return;
+  s_statusKey = key;
+
+  char temp[12] = "", wIcon[5] = "", cloudIcon[5] = "";
+  const lv_font_t* wFont = nullptr;
+  const lv_font_t* cFont = nullptr;
+  if (wd.ok) {
+    snprintf(temp, sizeof(temp), "%d°", (int)lroundf(wd.temp));
+    const uint32_t cp = icons ? iconCodepoint(weather::mdiIcon(wd)) : 0;
+    if (cp && (wFont = iconFont(20, cp))) iconUtf8(cp, wIcon);
+  }
+  // Cloud: shown once the weather API was tried; red while it fails
+  const bool cloud = wd.ok || wd.failing;
+  const uint32_t ccp = icons ? iconCodepoint(wd.failing ? "cloud-off-outline" : "cloud-check-outline") : 0;
+  if (ccp && (cFont = iconFont(20, ccp))) iconUtf8(ccp, cloudIcon);
+  const uint32_t pcCp = icons ? iconCodepoint("monitor") : 0;
+  char pcIcon[5] = "";
+  const lv_font_t* pFont = pcCp ? iconFont(20, pcCp) : nullptr;
+  if (pFont) iconUtf8(pcCp, pcIcon);
+
+  auto show = [](lv_obj_t* o, bool on) {
+    if (on) lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+  };
+  for (int i = 0; i < s_count; i++) {
+    Page& p = s_pages[i];
+    if (!p.bar) continue;
+    show(p.wIcon, wFont != nullptr);
+    if (wFont) {
+      lv_obj_set_style_text_font(p.wIcon, wFont, 0);
+      lv_label_set_text(p.wIcon, wIcon);
+    }
+    show(p.wTemp, wd.ok);
+    lv_label_set_text(p.wTemp, temp);
+    show(p.pc, pc);
+    if (pFont) {
+      lv_obj_set_style_text_font(p.pc, pFont, 0);
+      lv_label_set_text(p.pc, pcIcon);
+    }
+    show(p.cloud, cloud);
+    if (cFont) {
+      lv_obj_set_style_text_font(p.cloud, cFont, 0);
+      lv_label_set_text(p.cloud, cloudIcon);
+    }
+    lv_obj_set_style_text_color(p.cloud, lv_color_hex(wd.failing ? C_CRIT : C_OK), 0);
+    p.stale = true;
+  }
+}
+
 // Header clock and WiFi indicator, checked once a second; page images are
 // only marked stale when something visible changed.
 void updateHeaders() {
@@ -660,6 +735,7 @@ void updateHeaders() {
       s_pages[i].stale = true;
     }
   }
+  updateStatus();
   const time_t epoch = time(nullptr);
   if (epoch < 1609459200) return;  // not synced yet
   struct tm lt;
