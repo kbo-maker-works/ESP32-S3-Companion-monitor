@@ -24,11 +24,21 @@ public:
     static void setPcOnline(bool v) { _pc() = v; }
     static void setServerState(int8_t s) { _srv() = s; }   // -1 sin configurar, 0 caído, 1 ok
 
-    // Nivel de señal 0..3, o -1 sin conexión
+    // Nivel de señal 0..3, o -1 sin conexión. Con histéresis (4 dB) y como mucho
+    // una lectura cada 2 s: si el RSSI baila en un umbral, el nivel no parpadea
+    // (cada cambio obliga a repintar la barra, y en el radar a rehacer su capa).
     static int wifiLevel() {
-        if (!NetManager::isConnected()) return -1;
+        static int level = -1;
+        static uint32_t at = 0;
+        if (!NetManager::isConnected()) { level = -1; return -1; }
+        if (level >= 0 && millis() - at < 2000) return level;
+        at = millis();
+        static const int TH[3] = {-78, -67, -55};   // umbrales para subir a 1, 2, 3
         int r = WiFi.RSSI();
-        return r > -55 ? 3 : r > -67 ? 2 : r > -78 ? 1 : 0;
+        if (level < 0) level = r > TH[2] ? 3 : r > TH[1] ? 2 : r > TH[0] ? 1 : 0;
+        while (level < 3 && r > TH[level] + 4) level++;
+        while (level > 0 && r < TH[level - 1] - 4) level--;
+        return level;
     }
 
     // Clave que cambia cuando hay que repintar (minuto, conexión, tiempo)
@@ -41,9 +51,13 @@ public:
                (w.ok ? (int)lroundf(w.temp) * 1000 : 0);
     }
 
-    static void draw(Arduino_GFX &g) {
+    // background=false: el fondo semitransparente ya está pintado (lo usa el radar,
+    // que lo guarda en su capa fija para no recalcularlo)
+    static void drawBackground() { Panel::fill(0, 0, SCREEN_W, HEIGHT - 2, 0, 0x0000, 120); }
+
+    static void draw(Arduino_GFX &g, bool background = true) {
         uint16_t acc = Theme::accent();
-        Panel::fill(0, 0, SCREEN_W, HEIGHT - 2, 0, 0x0000, 120);
+        if (background) drawBackground();
 
         // Izquierda: hora, fecha y temperatura
         time_t now = time(nullptr);

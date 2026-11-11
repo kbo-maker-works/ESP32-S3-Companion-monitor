@@ -25,7 +25,7 @@ public:
     static constexpr int COUNT = 6;
     App apps[COUNT] = {
         {"icon_ai", "IA", false},     {"icon_sys", "SISTEMA", false}, {"icon_net", "RED", false},
-        {"icon_rdr", "RADAR", false}, {"icon_aud", "AUDIO", false},   {"icon_cfg", "AJUSTES", true},
+        {"icon_rdr", "RADAR", true},  {"icon_aud", "AUDIO", false},   {"icon_cfg", "AJUSTES", true},
     };
 
 

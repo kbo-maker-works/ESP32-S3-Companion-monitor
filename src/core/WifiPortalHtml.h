@@ -142,6 +142,19 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
 </div>
 
 <div class="card">
+  <div class="card-title">Radar de vuelos <span class="tag">adsb.lol</span></div>
+  <label for="rdrKm">Radio alrededor de tu ubicación</label>
+  <select id="rdrKm" onchange="post('/api/config',{radar_km:this.value}).then(()=>toast('Radio: '+this.value+' km')).catch(e=>toast(e.message))">
+    <option value="10">10 km</option><option value="25">25 km</option><option value="50">50 km</option><option value="100">100 km</option>
+  </select>
+  <label for="rdrGnd">Mostrar</label>
+  <select id="rdrGnd" onchange="post('/api/config',{radar_gnd:this.value}).then(()=>toast('Filtro: '+this.options[this.selectedIndex].text)).catch(e=>toast(e.message))">
+    <option value="0">En vuelo</option><option value="1">En tierra</option><option value="2">Todos</option>
+  </select>
+  <div class="hint">El centro es la ubicación del tiempo. En la pantalla RADAR el radio se cambia tocando "RADIO" en el pie, y el filtro con el botón VUELO / TIERRA / TODOS del panel.</div>
+</div>
+
+<div class="card">
   <div class="card-title">Punto de acceso <span id="apSec" class="tag"></span></div>
   <label for="apSsid">Nombre del AP</label>
   <input type="text" id="apSsid" maxlength="32" autocapitalize="off">
@@ -576,6 +589,8 @@ fetch('/api/config').then(r=>r.json()).then(c=>{
   $('tzSel').value=known?c.tz:'custom';if(!known)$('tzCustom').value=c.tz;tzChanged();
   $('br').value=c.brightness;brLabel(c.brightness);
   bgHome=c.bg_home||'';bgMark();
+  if(c.radar_km)$('rdrKm').value=c.radar_km;
+  if(c.radar_gnd!==undefined)$('rdrGnd').value=c.radar_gnd;
   $('apSsid').value=c.ap_ssid;$('apSec').textContent=c.ap_secure?'🔒 con clave':'abierto';
 });
 sdInfo().then(d=>{if(d.mounted){sdList('/');bgList();}}).catch(()=>{});

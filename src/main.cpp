@@ -12,10 +12,12 @@
 #include "core/SdManager.h"
 #include "core/TextAA.h"
 #include "core/Power.h"
+#include "core/Prof.h"
 #include "fonts/Fonts.h"
 #include "screens/HomeScreen.h"
 #include "screens/SettingsScreen.h"
 #include "screens/SaverScreen.h"
+#include "screens/RadarScreen.h"
 
 // Desktop companion — Guition JC3248W535 (ESP32-S3, 3.5" 480x320 táctil)
 //
@@ -59,12 +61,13 @@ static void notifyNet(NetManager::Event e) {
 }
 
 // ---------------------------------------------------------------------------
-// Pantallas: inicio (lanzador de módulos), Ajustes y salvapantallas
+// Pantallas: inicio (lanzador de módulos), Ajustes, Radar y salvapantallas
 // ---------------------------------------------------------------------------
-enum class Screen { Home, Settings, Saver };
+enum class Screen { Home, Settings, Radar, Saver };
 static Screen screen = Screen::Home;
 static HomeScreen homeScreen;
 static SettingsScreen settingsScreen;
+static RadarScreen radarScreen;
 static SaverScreen saverScreen;
 static Screen saverReturn = Screen::Home;   // a dónde vuelve el salvapantallas
 static uint32_t lastTouchMs = 0;
@@ -74,6 +77,7 @@ static bool swallowGesture = false;          // el toque que despierta no cuenta
 static bool drawScreen(bool force) {
     StatusBar::setPcOnline(pcLink.isOnline());
     if (screen == Screen::Saver) return saverScreen.update(display.gfx(), force);
+    if (screen == Screen::Radar) return radarScreen.update(display.gfx(), force);
     if (screen == Screen::Settings) {
         if (force) settingsScreen.draw(display.gfx());
         return force;
@@ -85,8 +89,10 @@ static bool drawScreen(bool force) {
 
 static void openScreen(Screen s) {
     if (screen == Screen::Settings) settingsScreen.exit();
+    if (screen == Screen::Radar) radarScreen.exit();
     screen = s;
     if (s == Screen::Settings) settingsScreen.enter();
+    if (s == Screen::Radar) radarScreen.enter();
 }
 
 // Cambios guardados desde el portal o desde Ajustes. Devuelve true si hay que repintar.
@@ -110,7 +116,14 @@ static bool applySettings(uint8_t chg) {
         if (screen == Screen::Settings) settingsScreen.refresh();
         repaint = true;
     }
+    if ((chg & (Settings::CHG_THEME | Settings::CHG_BG)) && screen == Screen::Radar) radarScreen.invalidateBase();
     if (chg & Settings::CHG_THEME) repaint = true;
+    if (chg & Settings::CHG_RGND) repaint = true;   // filtro del radar: se aplica al copiar los datos
+    if (chg & Settings::CHG_RADAR) {
+        if (screen == Screen::Radar) radarScreen.radiusChanged();
+        Toast::show("Radio del radar: " + String(Settings::get().radarKm) + " km", "", 1500, Theme::accent());
+        repaint = true;
+    }
     return repaint;
 }
 
@@ -123,12 +136,14 @@ static bool updateSaver() {
         if (screen == Screen::Saver && !swallowGesture) {
             saverScreen.exit();
             screen = saverReturn;
+            if (screen == Screen::Radar) FlightService::setActive(true);   // reanuda las peticiones
             swallowGesture = true;
             return true;
         }
     }
     if (screen != Screen::Saver && s.ssOn && millis() - lastTouchMs > (uint32_t)s.ssMin * 60000UL) {
         saverReturn = screen;
+        if (screen == Screen::Radar) FlightService::setActive(false);   // sin peticiones mientras nadie mira
         screen = Screen::Saver;
         saverScreen.enter();
         Serial.println("[Saver] inactivo: salvapantallas");
@@ -145,8 +160,16 @@ static bool handleGesture(Gesture gs) {
         if (i < 0) return false;
         const HomeScreen::App &a = homeScreen.apps[i];
         if (!strcmp(a.id, "icon_cfg")) { openScreen(Screen::Settings); return true; }
+        if (!strcmp(a.id, "icon_rdr")) { openScreen(Screen::Radar); return true; }
         Toast::show(String(a.label) + " · aún no disponible", "", 1500, Theme::MUTED);
         return false;
+    }
+    if (screen == Screen::Radar) {
+        switch (radarScreen.handle(gs, touch.startX(), touch.startY())) {
+            case RadarScreen::Result::Exit:   openScreen(Screen::Home); return true;
+            case RadarScreen::Result::Redraw: return true;
+            default:                          return false;
+        }
     }
     switch (settingsScreen.handle(gs, touch.startX(), touch.startY())) {
         case SettingsScreen::Result::Exit:   openScreen(Screen::Home); return true;
@@ -173,12 +196,19 @@ void setup() {
 
     NetManager::begin();    // AP siempre activo; espera hasta 8 s a la red guardada
     SdManager::setupRoutes(NetManager::web());   // gestor de la microSD en el portal
+    FlightService::begin();   // tarea en segundo plano; solo pide datos con el RADAR abierto
 
+#if RADAR_PROF
+    openScreen(Screen::Radar);   // perfilado: arranca directo en el radar
+#endif
     drawScreen(true);
     display.flush();
 }
 
 void loop() {
+#if RADAR_PROF
+    uint32_t loopT0 = micros();
+#endif
     NetManager::loop();
     pcLink.update();
 
@@ -215,6 +245,15 @@ void loop() {
     }
 #endif
 
-    if (dirty) display.flush();
+    if (dirty) {
+        PROF(FLUSH);
+        // El radar solo anima su franja izquierda: vuelca esas filas si puede
+        if (screen == Screen::Radar) display.flushRows(radarScreen.flushRows());
+        else display.flush();
+    }
+#if RADAR_PROF
+    Prof::add(Prof::LOOP, micros() - loopT0);
+    Prof::tick();
+#endif
     delay(5);
 }

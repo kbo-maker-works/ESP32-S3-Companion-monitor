@@ -33,10 +33,12 @@ public:
         uint8_t ssMode;          // qué muestra: 0 reloj, 1 fotos
         uint8_t ssFace;          // face del reloj (SaverScreen::FACES)
         uint16_t ssPhotoSec;     // segundos entre fotos
+        uint8_t radarKm;         // radio del radar: 10, 25, 50 o 100 km
+        uint8_t radarGnd;        // filtro del radar: 0 en vuelo, 1 en tierra, 2 todos
     };
 
     // Qué ha cambiado desde el portal; main.cpp lo aplica (pantalla, hora, clima).
-    enum Change : uint8_t { CHG_BRIGHT = 1, CHG_TZ = 2, CHG_LOC = 4, CHG_BG = 8, CHG_THEME = 16, CHG_SAVER = 32 };
+    enum Change : uint8_t { CHG_BRIGHT = 1, CHG_TZ = 2, CHG_LOC = 4, CHG_BG = 8, CHG_THEME = 16, CHG_SAVER = 32, CHG_RADAR = 64, CHG_RGND = 128 };
 
     static Data &get() { static Data d; return d; }
 
@@ -60,6 +62,9 @@ public:
         d.ssMode     = p.getUChar("ss_mode", 0);
         d.ssFace     = p.getUChar("ss_face", 0);
         d.ssPhotoSec = p.getUShort("ss_photo", 30);
+        d.radarKm    = p.getUChar("rdr_km", 25);
+        d.radarGnd   = min<uint8_t>(p.getUChar("rdr_gnd", 0), 2);
+        if (d.radarKm != 10 && d.radarKm != 25 && d.radarKm != 50 && d.radarKm != 100) d.radarKm = 25;
         p.end();
         if (d.brightness < 5) d.brightness = 5;
         if (d.apSsid.isEmpty()) d.apSsid = AP_SSID;
@@ -85,6 +90,8 @@ public:
         p.putUChar("ss_mode", d.ssMode);
         p.putUChar("ss_face", d.ssFace);
         p.putUShort("ss_photo", d.ssPhotoSec);
+        p.putUChar("rdr_km", d.radarKm);
+        p.putUChar("rdr_gnd", d.radarGnd);
         p.end();
     }
 

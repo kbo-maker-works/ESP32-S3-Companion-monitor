@@ -308,6 +308,8 @@ private:
             d["ap_ssid"]    = c.apSsid;
             d["ap_secure"]  = c.apPass.length() >= 8;
             d["bg_home"]    = c.bgHome;
+            d["radar_km"]   = c.radarKm;
+            d["radar_gnd"]  = c.radarGnd;
             _sendJson(200, d);
         });
 
@@ -335,6 +337,18 @@ private:
             if (server().hasArg("brightness")) {
                 c.brightness = constrain(server().arg("brightness").toInt(), 5, 255);
                 chg |= Settings::CHG_BRIGHT;
+            }
+            if (server().hasArg("radar_gnd")) {
+                int v = server().arg("radar_gnd").toInt();
+                if (v < 0 || v > 2) { _sendError("Filtro no válido (0 vuelo, 1 tierra, 2 todos)"); return; }
+                c.radarGnd = v;
+                chg |= Settings::CHG_RGND;
+            }
+            if (server().hasArg("radar_km")) {
+                int km = server().arg("radar_km").toInt();
+                if (km != 10 && km != 25 && km != 50 && km != 100) { _sendError("Radio no válido (10, 25, 50 o 100 km)"); return; }
+                c.radarKm = km;
+                chg |= Settings::CHG_RADAR;
             }
             if (server().hasArg("bg_home")) {
                 String bg = server().arg("bg_home");

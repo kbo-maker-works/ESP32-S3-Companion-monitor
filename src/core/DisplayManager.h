@@ -34,6 +34,15 @@ public:
 
     void flush() { _canvas->flush(); }
 
+    // Vuelca solo las primeras `rows` filas NATIVAS del panel (= columnas lógicas
+    // x 0..rows-1, a todo lo alto). Siempre desde la fila 0: el AXS15231B por QSPI
+    // no respeta bien el inicio de ventana en refrescos parciales, pero
+    // empezando en 0 funciona. Para animaciones que solo tocan la parte izquierda.
+    void flushRows(int rows) {
+        if (rows >= 480) { flush(); return; }
+        _panel->draw16bitRGBBitmap(0, 0, _canvas->getFramebuffer(), 320, rows);
+    }
+
     void setBacklight(uint8_t v) { ledcWrite(LCD_BL, v); }
 
 private:
