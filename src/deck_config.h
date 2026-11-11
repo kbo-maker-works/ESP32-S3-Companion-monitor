@@ -1,0 +1,241 @@
+// Guition deck configuration: `deck.json` schema v1 (see the deck plan).
+//
+// { "schema": 1, "theme": "midnight",
+//   "pages": [
+//     { "id": "desk", "name": "Desk",
+//       "layouts": { "landscape": { "cols": 4, "rows": 3 } },
+//       "tiles": [
+//         { "id": "t1", "type": "action", "label": "PC", "sub": "Page",
+//           "icon": "mdi:monitor", "color": "#F6C56B",
+//           "pos": { "landscape": { "x": 0, "y": 0, "w": 1, "h": 1 } },
+//           "tap":  { "action": "page", "page": "pc" },
+//           "hold": { "action": "more-info" } } ] } ] }
+//
+// A PC metric tile: { "type": "metric", "metric": <companion id>,
+//   "pc": "<companion pc_id>" (optional, default the first known PC),
+//   "style": "number" | "chart" | "bar", "scaleMax": 0 (= by unit) }.
+//
+// A sensor tile reads an HTTP endpoint:
+// { "type": "sensor", "http": { "url": "http://host/usage",
+//   "path": "cpu.used", "poll": 30, "headers": { "Name": "value" } },
+//   "unit": "%", "style": "number" | "chart", "warn": 70, "crit": 90 }.
+// Thresholds are optional, in the sensor unit; crit < warn means lower is
+// worse, otherwise higher is worse. "format": "duration" shows a number in
+// s / min / h / d as "1h 49m".
+// GET only; poll = 5..3600 seconds (default 30). Dot paths accept array
+// indexes; empty path reads a scalar body. Charts keep 48 numeric readings.
+// Sensors have no default tap/hold action.
+// "detail": "runtime {ups.runtime_min|min}" adds a small line with
+// values from the same reply; "|unit" formats a number as a duration.
+// "rows": [{ "label": "5h", "path": "claude.five_hour.used" }, ...] (1..4)
+// shows label, bar and value per row under the name instead of one reading;
+// the bar spans 0..scaleMax (default 100) and goes when the tile is too narrow.
+// A row "value": "{codex.five_hour.reset_min|min}" shows that text instead of
+// the reading while the bar fits, else the reading. "{path}" fields also work
+// in an HTTP sensor's "label" ("Codex {codex.five_hour.used}%").
+// "icon": "none" on a button or sensor tile shows no icon.
+//
+// Bambu printers: "printers": [{ "id": "h2c", "name": "H2C",
+//   "ip": "192.168.0.54" }] (serial and access code live in NVS, never in
+//   deck.json). A page with "printer": "h2c" exists only while that printer
+//   is enabled. A printer tile:
+// { "type": "printer", "printer": "h2c", "show": "hero" | "nozzle" | "bed" |
+//   "chamber" | "filament" | "layer" | "light" | "ams" | "slots" | "summary",
+//   "nozzle": "left" | "right", "unit": 1 } (unit is the 1-based AMS position).
+//
+// "type": "clock": the time, and the date when the tile has room
+// (24h and time zone from the device settings). Read-only.
+//
+// "type": "media": the PC's current track, cover and playback controls.
+// { "type": "media", "pc": "<pc_id>" (optional), "color": "#7DB5FF" }.
+// Takes "when" like other tiles; touches are built in, with no tap/hold actions.
+//
+// "textColor": "#RRGGBB" (optional) colours the tile's text; for a metric
+// tile "chartColor" colours the chart or bar line apart from "color" (the name).
+// Tile look, all optional, else the theme: "bgColor" (background while off,
+// the glass tint in Glass), "onColor" (fill while on, default "color"),
+// "onTextColor", and in Glass "opacity" / "onOpacity" (0..100 %, else the
+// display's Tile opacity / On opacity; auto text may still darken the glass).
+// Action, slider and sensor tiles take "iconStyle": "plain" (no circle, the
+// icon fills its place), "iconColor" / "onIconColor" (else "color"; a plain
+// icon while on: the text colour) and "onIcon" (the icon while on).
+//
+// { "type": "slider", "control": "pc-volume", "pc": "<pc_id>" (optional) }:
+// the PC's master volume through the companion; drag sideways to set it, a
+// tap mutes.
+//
+// "confirm": "off" | "always" (optional, tap and hold actions): ask on the
+// device before turning the tile off, or before any action it runs.
+//
+// "when" (optional, any tile): the tile shows only while a condition holds
+// and leaves its cell free otherwise, so two tiles can share a cell.
+//   "pc-on" | "pc-off": the tile's PC (its "pc" command or metric PC, else
+//     the first known one) is online / offline. Offline counts after a grace
+//     period, so a companion restart does not reshuffle the page.
+// A page takes "when" too (its PC is the first known one) and "auto": true:
+// the deck slides to the page when it appears and back to the page shown
+// before when it goes.
+//
+// An HTTP request as a tap or hold action (plain http on the LAN only):
+// { "action": "http", "method": "POST", "url": "http://host/path",
+//   "body": "text" | { json }, "contentType": "...", "headers": { "K": "v" } }.
+// method defaults to GET, or POST with a body.
+//
+// A command to a PC running the companion (paired from the companion):
+// { "action": "pc", "pc": "<pc_id>" (optional), "cmd": "media_play_pause" |
+//   "media_next" | "media_prev" | "media_stop" | "volume_up" | "volume_down" |
+//   "volume_mute" | "lock" | "sleep" | "restart" | "shutdown" | "hotkey" }.
+// "hotkey" takes "keys": "ctrl+shift+m" (cmd then holds "hotkey:ctrl+shift+m").
+//
+// { "action": "more-info" }: the tile's detail card (name, state and its tap
+// action as a button). `sub` is an optional fixed second line.
+// Positions are keyed by orientation; a tile without one for the current
+// orientation flows into the next free cell. Adjacent pages with the same
+// "group" stack into one column: left/right moves between columns, up/down
+// between the pages of a column. Pages of type "metrics" (left
+// over from StatNode) are skipped.
+#ifndef DECK_CONFIG_H
+#define DECK_CONFIG_H
+
+#include <Arduino.h>
+#include <vector>
+
+namespace deck {
+
+constexpr int ORIENT_LANDSCAPE = 0;
+constexpr int ORIENT_PORTRAIT = 1;
+constexpr int MAX_DECK_PAGES = 8;
+constexpr int MAX_PAGE_TILES = 24;
+
+enum TileType : uint8_t { TILE_ACTION = 0, TILE_SENSOR, TILE_METRIC, TILE_SLIDER, TILE_CLOCK, TILE_PRINTER, TILE_MEDIA };
+enum PrinterShow : uint8_t { PS_HERO = 0, PS_NOZZLE, PS_BED, PS_CHAMBER, PS_FILAMENT, PS_LAYER, PS_LIGHT, PS_AMS, PS_SLOTS, PS_SUMMARY };
+constexpr int MAX_PRINTERS = 2;
+enum MetricStyle : uint8_t { METRIC_NUMBER = 0, METRIC_CHART, METRIC_BAR };
+enum ActionKind : uint8_t {
+  ACT_NONE = 0,
+  ACT_PAGE,    // {page: id}
+  ACT_DETAIL,  // "more-info": the tile's detail card
+  ACT_HTTP,    // {method, url, body, contentType, headers}
+  ACT_PC,      // {pc, cmd}: a command to a paired PC's companion
+};
+enum ConfirmMode : uint8_t { CONFIRM_NONE = 0, CONFIRM_OFF, CONFIRM_ALWAYS };
+enum WhenKind : uint8_t { WHEN_ALWAYS = 0, WHEN_PC_ON, WHEN_PC_OFF };
+
+struct WhenDef {
+  WhenKind kind = WHEN_ALWAYS;
+};
+
+struct TileAction {
+  ActionKind kind = ACT_NONE;
+  String page;
+  String method, url, body, ctype;  // ACT_HTTP
+  String headers;                   // ACT_HTTP: "Name: value\n" lines
+  String pc, cmd;                   // ACT_PC: companion pc_id ("" = first PC), command
+};
+
+// set = an explicit cell (x, y). w and h always apply: a tile with only a
+// span flows into the next free place that fits it. All four in half cells
+// (deck.json takes 0.5 steps: "w": 1.5).
+struct TilePos {
+  bool set = false;
+  uint8_t x = 0, y = 0, w = 2, h = 2;
+};
+
+struct HttpSensorDef {
+  bool enabled = false;
+  String url, headers, path;
+  uint16_t poll = 30;
+};
+
+constexpr int MAX_SENSOR_ROWS = 4;
+struct SensorRowDef {
+  String label, path;
+  String value;  // optional text template like "detail"; the bar keeps path
+};
+
+struct TileDef {
+  String id;
+  TileType type = TILE_ACTION;
+  String label, sub, icon;
+  bool noName = false;  // "label": "" (or blank): show no name
+  bool iconPlain = false;   // "iconStyle": "plain": no circle
+  String onIcon;            // the icon while on, "" = icon
+  HttpSensorDef http;
+  String unit;  // HTTP sensor: unit for JSON numbers only
+  String detail;  // HTTP sensor: second line template, see above
+  std::vector<SensorRowDef> rows;  // HTTP sensor: label + bar + value lines
+  bool duration = false;  // sensor: "format": "duration"
+  bool hasColor = false;
+  uint32_t color = 0;
+  bool hasTextColor = false, hasChartColor = false;
+  uint32_t textColor = 0, chartColor = 0;
+  bool hasBgColor = false, hasOnColor = false, hasOnTextColor = false;
+  uint32_t bgColor = 0, onColor = 0, onTextColor = 0;
+  bool hasIconColor = false, hasOnIconColor = false;
+  uint32_t iconColor = 0, onIconColor = 0;
+  int8_t opacity = -1, onOpacity = -1;  // Glass, %, -1 = the display setting
+  TilePos pos[2];
+  TileAction tap, hold;
+  ConfirmMode confirm = CONFIRM_NONE;
+  uint8_t metric = 0;  // TILE_METRIC: companion metric id
+  String pc;           // PC metric, media and volume: companion pc_id, "" = the first known PC
+  MetricStyle style = METRIC_NUMBER;
+  bool hasWarn = false, hasCrit = false;
+  float warn = 0, crit = 0;
+  uint16_t scaleMax = 0;  // 0 = full scale by unit (sensor rows: 100)
+  String printer;         // TILE_PRINTER: printer id
+  PrinterShow show = PS_HERO;
+  uint8_t nozzle = 0;     // PS_NOZZLE: 0 = right / only, 1 = left
+  uint8_t amsUnit = 1;    // PS_AMS: 1-based position in the reported units
+  bool pcVolume = false;  // TILE_SLIDER: "control": "pc-volume"
+  WhenDef when;
+  bool shown = true;  // runtime: "when" as the pages were last built
+};
+
+struct PrinterDef {
+  String id, name, ip;
+};
+
+struct PageDef {
+  String id, name;
+  String group;  // adjacent pages with the same group form one column
+  String printer;  // built only while this printer is powered
+  WhenDef when;
+  bool autoShow = false;  // "auto": slide here when it appears, back when it goes
+  bool home = false;      // "home": the page the deck starts on
+  bool shown = true;      // runtime, as for tiles
+  uint8_t cols[2] = {4, 3};
+  uint8_t rows[2] = {3, 4};
+  std::vector<TileDef> tiles;
+};
+
+struct DeckConfig {
+  uint8_t schema = 1;
+  String theme;
+  std::vector<PrinterDef> printers;
+  std::vector<PageDef> pages;
+};
+
+// Mounts LittleFS (the board's spare data partition) on first use. Loads
+// /deck.json when present and valid, otherwise the built-in default. Fills
+// *source with where the config came from and *err with why a stored file
+// was rejected (empty when it was not).
+bool deckConfigLoad(DeckConfig& out, String* source, String* err);
+// Parse and validate a JSON document. Used by the loader and, later, by the
+// portal before anything is written.
+bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err);
+// One tap/hold action object on its own (the portal's HTTP Test button).
+bool deckActionParse(const char* json, size_t len, TileAction& out, String* err);
+// The stored /deck.json text, or the built-in default.
+void deckConfigText(String& out);
+// Validate and store as /deck.json (written to a temp file, then renamed, so a
+// power cut never leaves half a file). On success *out is the parsed config.
+bool deckConfigStore(const String& text, DeckConfig& out, String& err);
+// LittleFS mounted (mounts on first call).
+bool deckFsReady();
+// Factory reset: delete every stored file but keep (a path such as "/mdi.ttf").
+bool deckFsWipe(const char* keep);
+
+}  // namespace deck
+
+#endif  // DECK_CONFIG_H

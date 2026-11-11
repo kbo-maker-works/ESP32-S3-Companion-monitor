@@ -1,0 +1,536 @@
+// Guition deck configuration loader. See deck_config.h for the schema.
+#include "deck_config.h"
+#include "deck_bambu.h"
+#include "config.h"
+#include "psram_json.h"
+#include <ArduinoJson.h>
+#include <LittleFS.h>
+
+namespace deck {
+namespace {
+
+const char* const CONFIG_PATH = "/deck.json";
+
+// Built-in starter deck: a desk page (clock, PC media and volume, a few PC
+// metrics and commands) and the PC stats from the companion's first eight
+// metrics.
+const char kDefaultDeck[] PROGMEM = R"JSON({
+  "schema": 1,
+  "theme": "midnight",
+  "pages": [
+    { "id": "desk", "name": "Desk",
+      "layouts": { "landscape": { "cols": 4, "rows": 3 } },
+      "tiles": [
+        { "id": "clock", "type": "clock",
+          "pos": { "landscape": { "x": 0, "y": 0, "w": 2, "h": 1 } } },
+        { "id": "media", "type": "media",
+          "pos": { "landscape": { "x": 2, "y": 0, "w": 2, "h": 2 } } },
+        { "id": "cpu", "type": "metric", "metric": 1 },
+        { "id": "gpu", "type": "metric", "metric": 2 },
+        { "id": "volume", "type": "slider", "control": "pc-volume", "label": "Volume", "icon": "mdi:volume-high",
+          "pos": { "landscape": { "x": 0, "y": 2, "w": 2, "h": 1 } } },
+        { "id": "lock", "type": "action", "label": "Lock PC", "icon": "mdi:lock",
+          "tap": { "action": "pc", "cmd": "lock" }, "confirm": "always" },
+        { "id": "topc", "type": "action", "label": "PC", "sub": "Page", "icon": "mdi:chevron-right",
+          "tap": { "action": "page", "page": "pc" } }
+      ] },
+    { "id": "pc", "name": "PC",
+      "layouts": { "landscape": { "cols": 4, "rows": 3 } },
+      "tiles": [
+        { "id": "m1", "type": "metric", "metric": 1, "style": "chart",
+          "pos": { "landscape": { "x": 0, "y": 0, "w": 2, "h": 1 } } },
+        { "id": "m2", "type": "metric", "metric": 2, "style": "chart",
+          "pos": { "landscape": { "x": 2, "y": 0, "w": 2, "h": 1 } } },
+        { "id": "m3", "type": "metric", "metric": 3 },
+        { "id": "m4", "type": "metric", "metric": 4 },
+        { "id": "m5", "type": "metric", "metric": 5 },
+        { "id": "m6", "type": "metric", "metric": 6 },
+        { "id": "m7", "type": "metric", "metric": 7, "style": "bar",
+          "pos": { "landscape": { "x": 0, "y": 2, "w": 2, "h": 1 } } },
+        { "id": "m8", "type": "metric", "metric": 8, "style": "bar",
+          "pos": { "landscape": { "x": 2, "y": 2, "w": 2, "h": 1 } } }
+      ] }
+  ]
+})JSON";
+
+bool parseColor(const char* s, uint32_t& out) {
+  if (!s || s[0] != '#' || strlen(s) != 7) return false;
+  char* end = nullptr;
+  const unsigned long v = strtoul(s + 1, &end, 16);
+  if (!end || *end) return false;
+  out = (uint32_t)v;
+  return true;
+}
+
+bool parseHttp(JsonVariantConst v, TileAction& a, String* err, const String& where) {
+  a.url = (const char*)(v["url"] | "");
+  if (a.url.startsWith("https://")) {
+    if (err) *err = where + ": https is not supported, use http on the LAN";
+    return false;
+  }
+  if (!a.url.startsWith("http://") || a.url.length() < 8 || a.url.length() > 512) {
+    if (err) *err = where + ": http needs an http:// url (max 512 characters)";
+    return false;
+  }
+  for (JsonPairConst kv : v["headers"].as<JsonObjectConst>()) {
+    const String name = kv.key().c_str();
+    const String val = kv.value().as<const char*>() ? kv.value().as<const char*>() : "";
+    if (!name.length() || name.indexOf(':') >= 0 || (name + val).indexOf('\n') >= 0 ||
+        (name + val).indexOf('\r') >= 0) {
+      if (err) *err = where + ": bad http header '" + name + "'";
+      return false;
+    }
+    a.headers += name + ": " + val + "\n";
+  }
+  return true;
+}
+
+bool parseAction(JsonVariantConst v, TileAction& a, String* err, const String& where) {
+  a = TileAction();
+  if (v.isNull()) return true;
+  const char* kind = v["action"] | "none";
+  if (!strcmp(kind, "none")) {
+    a.kind = ACT_NONE;
+  } else if (!strcmp(kind, "more-info")) {
+    a.kind = ACT_DETAIL;
+  } else if (!strcmp(kind, "page")) {
+    a.kind = ACT_PAGE;
+    a.page = (const char*)(v["page"] | "");
+    if (!a.page.length()) {
+      if (err) *err = where + ": page action without a page id";
+      return false;
+    }
+  } else if (!strcmp(kind, "http")) {
+    a.kind = ACT_HTTP;
+    if (!parseHttp(v, a, err, where)) return false;
+    // A JSON body may be given as an object; it is sent as application/json.
+    JsonVariantConst body = v["body"];
+    if (body.is<const char*>()) a.body = (const char*)body;
+    else if (!body.isNull()) {
+      serializeJson(body, a.body);
+      a.ctype = "application/json";
+    }
+    if (a.body.length() > 2048) {
+      if (err) *err = where + ": http body too long (max 2048)";
+      return false;
+    }
+    if (v["contentType"].is<const char*>()) a.ctype = (const char*)v["contentType"];
+    if (!a.ctype.length() && a.body.length())
+      a.ctype = a.body[0] == '{' || a.body[0] == '[' ? "application/json" : "text/plain";
+    a.method = (const char*)(v["method"] | (a.body.length() ? "POST" : "GET"));
+    a.method.toUpperCase();
+    if (a.method != "GET" && a.method != "POST" && a.method != "PUT" && a.method != "PATCH" &&
+        a.method != "DELETE") {
+      if (err) *err = where + ": unknown http method '" + a.method + "'";
+      return false;
+    }
+  } else if (!strcmp(kind, "pc")) {
+    static const char* const kCmds[] = {"media_play_pause", "media_next", "media_prev", "media_stop",
+                                        "volume_up", "volume_down", "volume_mute", "lock", "sleep",
+                                        "restart", "shutdown", "hotkey"};
+    a.kind = ACT_PC;
+    a.pc = (const char*)(v["pc"] | "");
+    a.cmd = (const char*)(v["cmd"] | "");
+    bool known = false;
+    for (const char* c : kCmds) known = known || a.cmd == c;
+    if (!known) {
+      if (err) *err = where + ": unknown PC command '" + a.cmd + "'";
+      return false;
+    }
+    if (a.cmd == "hotkey") {
+      // Sent as "hotkey:ctrl+shift+m"; the companion checks the key names.
+      String keys = (const char*)(v["keys"] | "");
+      keys.toLowerCase();
+      bool ok = keys.length() > 0 && keys.length() <= 64;
+      for (const char* k = keys.c_str(); *k; k++) ok = ok && (isalnum((unsigned char)*k) || *k == '+');
+      if (!ok) {
+        if (err) *err = where + ": hotkey keys must look like \"ctrl+shift+m\"";
+        return false;
+      }
+      a.cmd += ":" + keys;
+    }
+  } else {
+    if (err) *err = where + ": unknown action '" + kind + "'";
+    return false;
+  }
+  return true;
+}
+
+// A number of cells in half cells (1.5 -> 3), rounded to the nearest half.
+uint8_t halves(JsonVariantConst v, int def, int lo, int hi) {
+  if (!v.is<float>()) return (uint8_t)def;
+  return (uint8_t)constrain((int)lroundf(v.as<float>() * 2), lo, hi);
+}
+
+void parsePos(JsonVariantConst v, TilePos& p) {
+  if (v.isNull()) return;
+  p.set = v["x"].is<float>() && v["y"].is<float>();
+  p.x = halves(v["x"], 0, 0, 30);
+  p.y = halves(v["y"], 0, 0, 30);
+  p.w = halves(v["w"], 2, 1, 12);
+  p.h = halves(v["h"], 2, 1, 12);
+}
+
+bool parseWhen(JsonVariantConst v, WhenDef& w, String* err, const String& where) {
+  if (v.isNull()) return true;
+  const char* s = v.is<const char*>() ? v.as<const char*>() : "";
+  if (!strcmp(s, "pc-on")) w.kind = WHEN_PC_ON;
+  else if (!strcmp(s, "pc-off")) w.kind = WHEN_PC_OFF;
+  else {
+    if (err) *err = where + ": when must be \"pc-on\" or \"pc-off\"";
+    return false;
+  }
+  return true;
+}
+
+void parseGrid(JsonVariantConst v, uint8_t& cols, uint8_t& rows) {
+  if (v.isNull()) return;
+  cols = (uint8_t)constrain((int)(v["cols"] | cols), 1, 6);
+  rows = (uint8_t)constrain((int)(v["rows"] | rows), 1, 6);
+}
+
+bool s_fsTried = false;
+bool s_fsOk = false;
+
+bool mountFs() {
+  if (!s_fsTried) {
+    s_fsTried = true;
+    // The 16 MB table's "spiffs" partition has never been used on this
+    // board, so formatting it on the first mount loses nothing.
+    s_fsOk = LittleFS.begin(true, "/littlefs", 14, "spiffs");  // 8 held by icon fonts
+    if (!s_fsOk) Serial.println("Deck: LittleFS mount FAILED");
+  }
+  return s_fsOk;
+}
+
+}  // namespace
+
+bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err) {
+  JsonDocument doc(psramJson());
+  const DeserializationError de = deserializeJson(doc, json, len);
+  if (de) {
+    if (err) *err = String("JSON: ") + de.c_str();
+    return false;
+  }
+  DeckConfig cfg;
+  cfg.schema = doc["schema"] | 0;
+  if (cfg.schema != 1) {
+    if (err) *err = "unsupported schema (expected 1)";
+    return false;
+  }
+  cfg.theme = (const char*)(doc["theme"] | "midnight");
+  auto printerKnown = [&](const String& id) {
+    for (const PrinterDef& d : cfg.printers)
+      if (d.id == id) return true;
+    return false;
+  };
+  for (JsonVariantConst pv : doc["printers"].as<JsonArrayConst>()) {
+    PrinterDef d;
+    d.id = (const char*)(pv["id"] | "");
+    d.name = (const char*)(pv["name"] | "");
+    d.ip = (const char*)(pv["ip"] | "");
+    // The id names NVS keys ("s_<id>"): short and plain.
+    bool plain = d.id.length() >= 1 && d.id.length() <= 12;
+    for (size_t i = 0; plain && i < d.id.length(); i++)
+      plain = isalnum((unsigned char)d.id[i]) || d.id[i] == '_';
+    if (!plain || printerKnown(d.id)) {
+      if (err) *err = "printer id '" + d.id + "' must be unique, 1-12 letters, digits or _";
+      return false;
+    }
+    if (!d.ip.length()) {
+      if (err) *err = "printer '" + d.id + "' needs an ip";
+      return false;
+    }
+    if (cfg.printers.size() >= MAX_PRINTERS) {
+      if (err) *err = "too many printers (max " + String(MAX_PRINTERS) + ")";
+      return false;
+    }
+    if (!d.name.length()) d.name = d.id;
+    cfg.printers.push_back(d);
+  }
+  JsonArrayConst pages = doc["pages"].as<JsonArrayConst>();
+  if (pages.isNull() || pages.size() == 0) {
+    if (err) *err = "no pages";
+    return false;
+  }
+  if (pages.size() > MAX_DECK_PAGES) {
+    if (err) *err = "too many pages (max " + String(MAX_DECK_PAGES) + ")";
+    return false;
+  }
+  for (JsonVariantConst pv : pages) {
+    PageDef p;
+    p.id = (const char*)(pv["id"] | "");
+    p.name = (const char*)(pv["name"] | "");
+    p.group = (const char*)(pv["group"] | "");
+    p.printer = (const char*)(pv["printer"] | "");
+    if (p.printer.length() && !printerKnown(p.printer)) {
+      if (err) *err = "page '" + p.id + "': unknown printer '" + p.printer + "'";
+      return false;
+    }
+    const char* type = pv["type"] | "tiles";
+    if (!strcmp(type, "metrics")) continue;
+    if (!p.id.length()) p.id = "page" + String(cfg.pages.size() + 1);
+    if (!parseWhen(pv["when"], p.when, err, "page '" + p.id + "'")) return false;
+    p.autoShow = p.when.kind != WHEN_ALWAYS && (pv["auto"] | false);
+    p.home = pv["home"] | false;
+    parseGrid(pv["layouts"]["landscape"], p.cols[ORIENT_LANDSCAPE], p.rows[ORIENT_LANDSCAPE]);
+    parseGrid(pv["layouts"]["portrait"], p.cols[ORIENT_PORTRAIT], p.rows[ORIENT_PORTRAIT]);
+    JsonArrayConst tiles = pv["tiles"].as<JsonArrayConst>();
+    if (tiles.size() > MAX_PAGE_TILES) {
+      if (err) *err = "page '" + p.id + "': too many tiles";
+      return false;
+    }
+    for (JsonVariantConst tv : tiles) {
+      TileDef t;
+      t.id = (const char*)(tv["id"] | "");
+      const String where = "page '" + p.id + "' tile '" + t.id + "'";
+      const char* tt = tv["type"] | "action";
+      if (!strcmp(tt, "action")) t.type = TILE_ACTION;
+      else if (!strcmp(tt, "sensor")) t.type = TILE_SENSOR;
+      else if (!strcmp(tt, "slider")) t.type = TILE_SLIDER;
+      else if (!strcmp(tt, "metric")) t.type = TILE_METRIC;
+      else if (!strcmp(tt, "clock")) t.type = TILE_CLOCK;
+      else if (!strcmp(tt, "media")) t.type = TILE_MEDIA;
+      else if (!strcmp(tt, "printer")) t.type = TILE_PRINTER;
+      else {
+        if (err) *err = where + ": unknown type '" + tt + "'";
+        return false;
+      }
+      t.label = (const char*)(tv["label"] | "");
+      t.label.trim();
+      t.noName = tv["label"].is<const char*>() && !t.label.length();
+      t.sub = (const char*)(tv["sub"] | "");
+      t.icon = (const char*)(tv["icon"] | "");
+      if (t.type == TILE_ACTION || t.type == TILE_SLIDER || t.type == TILE_SENSOR) {
+        t.iconPlain = !strcmp(tv["iconStyle"] | "", "plain");
+        t.onIcon = (const char*)(tv["onIcon"] | "");
+      }
+      t.hasColor = parseColor(tv["color"] | (const char*)nullptr, t.color);
+      t.hasTextColor = parseColor(tv["textColor"] | (const char*)nullptr, t.textColor);
+      t.hasChartColor = parseColor(tv["chartColor"] | (const char*)nullptr, t.chartColor);
+      t.hasBgColor = parseColor(tv["bgColor"] | (const char*)nullptr, t.bgColor);
+      t.hasOnColor = parseColor(tv["onColor"] | (const char*)nullptr, t.onColor);
+      t.hasOnTextColor = parseColor(tv["onTextColor"] | (const char*)nullptr, t.onTextColor);
+      t.hasIconColor = parseColor(tv["iconColor"] | (const char*)nullptr, t.iconColor);
+      t.hasOnIconColor = parseColor(tv["onIconColor"] | (const char*)nullptr, t.onIconColor);
+      if (tv["opacity"].is<int>()) t.opacity = (int8_t)constrain(tv["opacity"].as<int>(), 0, 100);
+      if (tv["onOpacity"].is<int>()) t.onOpacity = (int8_t)constrain(tv["onOpacity"].as<int>(), 0, 100);
+      parsePos(tv["pos"]["landscape"], t.pos[ORIENT_LANDSCAPE]);
+      parsePos(tv["pos"]["portrait"], t.pos[ORIENT_PORTRAIT]);
+      if (!parseWhen(tv["when"], t.when, err, where)) return false;
+      if (t.type == TILE_METRIC) {
+        const int m = tv["metric"] | 0;
+        if (m < 1 || m > MAX_METRICS) {
+          if (err) *err = where + ": metric id must be 1.." + String(MAX_METRICS);
+          return false;
+        }
+        t.metric = (uint8_t)m;
+        t.pc = (const char*)(tv["pc"] | "");
+        const char* st = tv["style"] | "number";
+        t.style = !strcmp(st, "chart") ? METRIC_CHART : !strcmp(st, "bar") ? METRIC_BAR : METRIC_NUMBER;
+        t.scaleMax = (uint16_t)constrain((int)(tv["scaleMax"] | 0), 0, 65535);
+        p.tiles.push_back(t);
+        continue;  // read-only: no tap or hold actions
+      }
+      if (t.type == TILE_SENSOR) {
+        TileAction source;
+        if (!tv["http"].is<JsonObjectConst>() || !parseHttp(tv["http"], source, err, where + " http")) {
+          if (err && !err->length()) *err = where + ": a sensor needs an http object";
+          return false;
+        }
+        t.http.enabled = true;
+        t.http.url = source.url;
+        t.http.headers = source.headers;
+        t.http.path = (const char*)(tv["http"]["path"] | "");
+        t.http.poll = (uint16_t)constrain((int)(tv["http"]["poll"] | 30), 5, 3600);
+        t.unit = (const char*)(tv["unit"] | "");
+        t.detail = (const char*)(tv["detail"] | "");
+        JsonVariantConst rows = tv["rows"];
+        if (!rows.isNull()) {
+          if (!rows.is<JsonArrayConst>() || rows.size() < 1 || rows.size() > MAX_SENSOR_ROWS) {
+            if (err) *err = where + ": rows must be an array of 1.." + String(MAX_SENSOR_ROWS);
+            return false;
+          }
+          for (JsonVariantConst rv : rows.as<JsonArrayConst>()) {
+            SensorRowDef row;
+            row.label = (const char*)(rv["label"] | "");
+            row.path = (const char*)(rv["path"] | "");
+            row.value = (const char*)(rv["value"] | "");
+            if (!row.path.length()) {
+              if (err) *err = where + ": every row needs a path";
+              return false;
+            }
+            t.rows.push_back(row);
+          }
+          t.scaleMax = (uint16_t)constrain((int)(tv["scaleMax"] | 0), 0, 65535);
+        }
+        t.style = !strcmp(tv["style"] | "number", "chart") && t.rows.empty() ? METRIC_CHART : METRIC_NUMBER;
+        t.duration = !strcmp(tv["format"] | "", "duration");
+        t.warn = tv["warn"] | 0.0f;
+        t.crit = tv["crit"] | 0.0f;
+        t.hasWarn = tv["warn"].is<float>() && isfinite(t.warn);
+        t.hasCrit = tv["crit"].is<float>() && isfinite(t.crit);
+      }
+      if (t.type == TILE_CLOCK || t.type == TILE_MEDIA) {
+        if (t.type == TILE_MEDIA) t.pc = (const char*)(tv["pc"] | "");
+        p.tiles.push_back(t);
+        continue;
+      }
+      if (t.type == TILE_PRINTER) {
+        t.printer = (const char*)(tv["printer"] | "");
+        if (!printerKnown(t.printer)) {
+          if (err) *err = where + ": unknown printer '" + t.printer + "'";
+          return false;
+        }
+        static const char* const kShow[] = {"hero", "nozzle", "bed", "chamber", "filament", "layer", "light", "ams", "slots", "summary"};
+        const char* sh = tv["show"] | "hero";
+        int k = 0;
+        while (k < 10 && strcmp(sh, kShow[k])) k++;
+        if (k == 10) {
+          if (err) *err = where + ": unknown show '" + sh + "'";
+          return false;
+        }
+        t.show = (PrinterShow)k;
+        t.nozzle = !strcmp(tv["nozzle"] | "right", "left") ? 1 : 0;
+        t.amsUnit = constrain(tv["unit"] | 1, 1, PRN_AMS_UNITS);
+        p.tiles.push_back(t);
+        continue;  // built-in taps: light toggles, summary opens the printer page
+      }
+      if (t.type == TILE_SLIDER) {
+        if (strcmp(tv["control"] | "", "pc-volume")) {
+          if (err) *err = where + ": a slider needs \"control\": \"pc-volume\"";
+          return false;
+        }
+        t.pcVolume = true;
+        t.pc = (const char*)(tv["pc"] | "");
+      }
+      if (!parseAction(tv["tap"], t.tap, err, where + " tap")) return false;
+      if (!parseAction(tv["hold"], t.hold, err, where + " hold")) return false;
+      const char* cf = tv["confirm"] | "";
+      if (!strcmp(cf, "off")) t.confirm = CONFIRM_OFF;
+      else if (!strcmp(cf, "always")) t.confirm = CONFIRM_ALWAYS;
+      else if (*cf) {
+        if (err) *err = where + ": unknown confirm '" + cf + "'";
+        return false;
+      }
+      // Defaults: PC volume mutes on a tap; an action tile holds to its detail card.
+      if (t.pcVolume && tv["tap"].isNull()) {
+        t.tap.kind = ACT_PC;
+        t.tap.pc = t.pc;
+        t.tap.cmd = "volume_mute";
+      }
+      if (tv["hold"].isNull() && t.type == TILE_ACTION) t.hold.kind = ACT_DETAIL;
+      p.tiles.push_back(t);
+    }
+    cfg.pages.push_back(p);
+  }
+  if (cfg.pages.empty()) {
+    if (err) *err = "no pages";
+    return false;
+  }
+  out = cfg;
+  return true;
+}
+
+bool deckActionParse(const char* json, size_t len, TileAction& out, String* err) {
+  JsonDocument doc;
+  const DeserializationError de = deserializeJson(doc, json, len);
+  if (de) {
+    if (err) *err = String("JSON: ") + de.c_str();
+    return false;
+  }
+  return parseAction(doc.as<JsonVariantConst>(), out, err, "action");
+}
+
+bool deckFsReady() { return mountFs(); }
+
+static bool wipeDirectory(const String& path, const char* keep) {
+  std::vector<String> paths;
+  File dir = LittleFS.open(path);
+  if (!dir || !dir.isDirectory()) return false;
+  for (File f = dir.openNextFile(); f; f = dir.openNextFile()) paths.push_back(f.path());
+  dir.close();
+  bool ok = true;
+  for (const String& p : paths) {
+    if (p == keep) continue;
+    File f = LittleFS.open(p);
+    const bool directory = f && f.isDirectory();
+    f.close();
+    if (directory) {
+      ok &= wipeDirectory(p, keep);
+      ok &= LittleFS.rmdir(p);
+    } else ok &= LittleFS.remove(p);
+  }
+  return ok;
+}
+
+bool deckFsWipe(const char* keep) {
+  return mountFs() && wipeDirectory("/", keep);
+}
+
+void deckConfigText(String& out) {
+  if (mountFs() && LittleFS.exists(CONFIG_PATH)) {
+    File f = LittleFS.open(CONFIG_PATH, "r");
+    if (f) {
+      f.setBufferSize(8192);  // over 4 KB: malloc puts it in PSRAM
+      out = f.readString();
+      f.close();
+      // Stored files passed deckConfigParse already; only catch a damaged one.
+      // A full parse here took ~14 KB of internal RAM in small Strings.
+      JsonDocument doc(psramJson());
+      if (!deserializeJson(doc, out) && doc["pages"].is<JsonArrayConst>()) return;
+    }
+  }
+  out = FPSTR(kDefaultDeck);
+}
+
+bool deckConfigStore(const String& text, DeckConfig& out, String& err) {
+  DeckConfig cfg;
+  if (!deckConfigParse(text.c_str(), text.length(), cfg, &err)) return false;
+  if (!mountFs()) {
+    err = "storage not available";
+    return false;
+  }
+  const char* tmp = "/deck.json.tmp";
+  File f = LittleFS.open(tmp, "w");
+  if (!f) {
+    err = "cannot write the file";
+    return false;
+  }
+  const size_t n = f.print(text);
+  f.close();
+  if (n != text.length()) {
+    LittleFS.remove(tmp);
+    err = "storage full";
+    return false;
+  }
+  LittleFS.remove(CONFIG_PATH);
+  if (!LittleFS.rename(tmp, CONFIG_PATH)) {
+    err = "cannot replace the file";
+    return false;
+  }
+  out = cfg;
+  return true;
+}
+
+bool deckConfigLoad(DeckConfig& out, String* source, String* err) {
+  if (err) *err = "";
+  if (mountFs() && LittleFS.exists(CONFIG_PATH)) {
+    File f = LittleFS.open(CONFIG_PATH, "r");
+    if (f) {
+      String text = f.readString();
+      f.close();
+      String why;
+      if (deckConfigParse(text.c_str(), text.length(), out, &why)) {
+        if (source) *source = CONFIG_PATH;
+        return true;
+      }
+      if (err) *err = why;
+      Serial.printf("Deck: %s rejected (%s), using the built-in deck\n", CONFIG_PATH, why.c_str());
+    }
+  }
+  if (source) *source = "built-in";
+  return deckConfigParse(kDefaultDeck, strlen_P(kDefaultDeck), out, nullptr);
+}
+
+}  // namespace deck

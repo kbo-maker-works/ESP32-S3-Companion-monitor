@@ -1,0 +1,189 @@
+// Guition JC3248W535 display pipeline: AXS15231B over QSPI driven directly
+// through spi_master, one flush task that owns the panel bus, software
+// rotation of a logical framebuffer into internal DMA bounce buffers, frames
+// started on the TE rising edge, and a page-slide compositor that builds
+// transition frames from cached page images without asking LVGL to render.
+//
+// Facts this rests on (measured in the Phase 0 spike, see the deck plan):
+// the panel only accepts full native 320x480 frames (no MADCTL rotation, the
+// CASET start column is ignored), 40 MHz is the clock ceiling, a full frame is
+// 15.4 ms on the wire against a 16.39 ms TE period, and the write is slower
+// than the scan, so a frame must start within ~1 ms of the TE rising edge.
+#ifndef DECK_PANEL_H
+#define DECK_PANEL_H
+
+#include <Arduino.h>
+
+namespace deck {
+
+static constexpr int NATIVE_W = 320;
+static constexpr int NATIVE_H = 480;
+static constexpr size_t FRAME_BYTES = (size_t)NATIVE_W * NATIVE_H * 2;
+
+// A full-screen logical image (logicalW() x logicalH()). stride is in pixels.
+// swap=true for little-endian RGB565 (LVGL), false for data already in panel
+// byte order. px == nullptr means "the latest complete
+// LVGL frame", resolved by the flush task when the frame is built.
+struct Src {
+  const uint16_t* px;
+  uint16_t stride;
+  bool swap;
+  uint16_t h = 0;  // rows; only needed for a panel image shorter than the screen
+  // Page images: grid columns, where the grid starts, and the column edges
+  // no tile crosses (bit k: edge k; 0 = all), for the cascade page fx.
+  uint8_t cols = 0;
+  int16_t top = 0;
+  uint16_t cuts = 0;
+};
+
+// Bus, panel init, a black first frame, TE interrupt and the flush task.
+// Backlight is left alone. Returns false if a buffer could not be allocated.
+bool panelBegin(uint8_t rotation);
+
+// Next TE edge on the millis() time base, or current time when TE is stale.
+// Monotonic across wrap; called only by the loop task.
+uint32_t panelFrameClockMs();
+
+// fn(ctx, lo, hi) over 0..n in batches, shared with a helper on core 0 when it
+// is free. Returns when all batches are done.
+void panelShare(void (*fn)(void* ctx, int lo, int hi), void* ctx, int n, int batch);
+
+// User rotation 0..3, 0 = native portrait (1 = landscape with USB-C on the
+// right).
+void panelSetRotation(uint8_t rotation);
+uint8_t panelRotation();
+int logicalW();
+int logicalH();
+
+// The two logical PSRAM framebuffers LVGL renders into (direct mode).
+uint16_t* panelLvBuffer(int i);
+// The latest complete LVGL frame (little-endian RGB565, logicalW() stride),
+// or nullptr before the first one. Stable while the LVGL task is busy
+// elsewhere, e.g. inside a web handler.
+const uint16_t* panelLatestLvFrame();
+
+// LVGL side. panelPostLv() is called from the flush callback on the last
+// area of a frame; gen is the UI generation the frame was rendered under.
+// panelWaitLvReady() blocks the LVGL task until the flush task has copied
+// every pixel out of a posted framebuffer (or dropped the frame): one token
+// per posted frame, up to two frames in flight.
+void panelPostLv(int idx, uint32_t gen);
+bool panelWaitLvReady(uint32_t timeoutMs);
+
+// --- Page-slide compositor ---------------------------------------------------
+// The visible strip is A | B (or A over B), offset `off` pixels into it
+// (0 = all A, logicalW() or logicalH() = all B). Only the touch task drives
+// drags; only the flush task advances animations.
+enum CompMode : uint8_t { COMP_NONE = 0, COMP_DRAG, COMP_ANIM, COMP_HOLD, COMP_FRAME, COMP_FRAME_HOLD };
+
+struct FrameRect { int16_t x, y, w, h; };
+// Scratch for the compositor: one entry per rect, filled each frame.
+struct FrameTileRun {
+  int16_t left, top, w, h, srcX, srcY;
+  uint32_t dx, dy;
+  uint8_t a5;
+};
+struct FrameScene {
+  Src base, picture, page;
+  const FrameRect* rects = nullptr;
+  FrameTileRun* runs = nullptr;  // capacity >= count
+  uint16_t count = 0;
+  bool waking = false;
+  bool clockFade = true;
+  // Optional ARGB8888 clock patch, captured by the loop before the animation.
+  const uint32_t* clock = nullptr;
+  uint16_t clockStride = 0;
+  FrameRect clockRect = {};
+};
+// Tiles leave one after another over the still page background, then the
+// background fades to the picture (reversed when waking).
+constexpr uint32_t FRAME_TILE_MS = 300, FRAME_FADE_MS = 500;
+inline uint32_t frameTileStep(int count) { return count > 1 ? (480 / (count - 1) < 40 ? 480 / (count - 1) : 40) : 0; }
+inline uint32_t frameTilesMs(int count) { return count ? FRAME_TILE_MS + (count - 1) * frameTileStep(count) : 0; }
+// Sources stay immutable until panelQuiesce. count == 0 is a picture crossfade.
+bool compBeginFrame(const FrameScene& scene, uint32_t durationMs);
+
+// Page strip, horizontal (columns) or vertical (pages of a column); pageA is
+// the dot index of A on that axis.
+bool compBeginDrag(const Src& a, const Src& b, int off, int pageA, bool vertical);
+// Vertical: `panel` (panel.h rows, full width) pulled down over `page`, which
+// is dimmed as the panel opens. off = visible panel rows, 0..panel.h.
+bool compBeginPanel(const Src& panel, const Src& page, int off);
+// Column count and the column shown, plus the page count of that column and
+// the page shown in it, for the dots the flush task draws during and shortly
+// after a slide.
+void panelSetPager(int count, int active, int vCount, int vActive);
+void compDrag(int off);
+// Animate to `toOff` over durMs. landing != 0 means the gesture ends in a new
+// state (another page, panel open/closed): the last frame stays frozen until
+// LVGL shows that state (see compSetHoldGen). landing == 0 = back to start.
+void compRelease(int toOff, uint32_t durMs, int8_t landing);
+// How page strips change: slide, crossfade A into B, a wavy water edge
+// sweeping over both pages, or depth (A sinks back and dims while B slides
+// over it), or cascade (each page's tile columns leave and arrive one after
+// another, from Src cols and top; the header above the grid moves as one).
+// Read when a drag begins.
+enum PageFx : uint8_t { PAGE_SLIDE = 0, PAGE_FADE, PAGE_WATER, PAGE_DEPTH, PAGE_CASCADE };
+void panelSetPageFx(PageFx fx);
+
+// Card morph: a rounded window flies from `from` to `to` over `base`, showing
+// the card picture scaled into it. Opening fades the picture in from `ghost`;
+// closing fades it out and then the window itself. Reveal instead shows the
+// card in place through a circle growing from (cx, cy), or shrinking back;
+// sheet slides the card up from below the screen, or back down.
+struct MorphScene {
+  Src base;            // px null: the latest LVGL frame
+  Src card;            // the card picture, cw x ch
+  int16_t cw, ch;
+  FrameRect from, to;
+  int16_t r0, r1;      // corner radius at the start and the end
+  uint16_t ghost;      // RGB565, little-endian
+  uint8_t dim;         // 2: the 50 % scrim fades in (open) or out (close); 0: none
+  bool open;
+  bool reveal;         // circle reveal of the card at `to`
+  int16_t cx, cy;
+  bool sheet;          // the card at `to` slides up from below
+};
+// After the last frame the screen holds until LVGL has a frame of generation
+// >= holdGen (one already posted counts).
+// Opening may begin before the card is drawn (card.px null): the scrim fades
+// in at once, the card's animation starts on compMorphCard.
+bool compBeginMorph(const MorphScene& m, uint32_t durMs, uint32_t holdGen);
+bool compMorphWaiting();
+void compMorphCard(const Src& card);
+CompMode compMode();
+// True while LVGL must not render (drag or animation in progress).
+bool compOwnsScreen();
+// Loop side: true once after an animation finished. *landing is +1/-1 when
+// the slide ended on the next/previous page, 0 when it went back.
+bool compTakeLanding(int8_t* landing);
+// After switching LVGL to the new page, release the frozen strip as soon as an
+// LVGL frame rendered under generation >= gen arrives.
+void compSetHoldGen(uint32_t gen);
+// Abort any slide immediately (rotation change, system screen).
+void compCancel();
+// compCancel() and wait until no frame is reading page images: call before
+// freeing snapshot buffers.
+void panelQuiesce();
+
+struct PanelStats {
+  uint32_t frames;
+  uint32_t compFrames;
+  uint32_t flushUsAvg;
+  uint32_t flushUsMax;
+  uint32_t buildUsAvg;
+  uint32_t frameUsAvg;  // first chunk build + elapsed flush (remaining build overlaps DMA)
+  uint32_t frameUsMax;
+  uint32_t teLate;      // edges skipped because the frame was not ready in time
+  uint32_t teTimeouts;  // frames sent without a TE edge (TE line dead)
+  uint32_t lvDropped;   // LVGL frames superseded by the compositor
+  uint32_t gapMaxUs;    // longest interval between frame starts while animating
+};
+// Snapshot and reset the counters.
+PanelStats panelTakeStats();
+// Independent counters, published after the last flush or a quiesced cancellation.
+bool compFrameResult(PanelStats& out);
+
+}  // namespace deck
+
+#endif  // DECK_PANEL_H
