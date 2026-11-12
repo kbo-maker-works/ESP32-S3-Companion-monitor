@@ -1,0 +1,1669 @@
+<!doctype html>
+<html lang="en" data-mode="dark" data-accent="green">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#161512" />
+    <title>TouchDeck</title>
+    <script>
+      (function () {
+        try {
+          var m = localStorage.getItem("sn_mode") || "dark";
+          var a = localStorage.getItem("sn_accent") || "green";
+          document.documentElement.dataset.mode = m;
+          document.documentElement.dataset.accent = a;
+        } catch (e) {}
+      })();
+    </script>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 9 9'><rect width='4' height='4' rx='1.2' fill='%23F6C56B'/><rect x='5' width='4' height='4' rx='1.2' fill='%235CC9A7'/><rect y='5' width='4' height='4' rx='1.2' fill='%23B3A6FF'/><rect x='5' y='5' width='4' height='4' rx='1.2' fill='%237DB5FF'/></svg>"
+    />
+    <link rel="stylesheet" href="/portal.css?v={{v:portal.css}}" />
+    <link rel="stylesheet" href="/portal-layout.css?v={{v:portal-layout.css}}" />
+    <style>
+      input[type="time"] {
+        appearance: none;
+        width: 100%;
+        max-width: 520px;
+        background: var(--card);
+        color: var(--ink);
+        border: 1px solid var(--line-2);
+        border-radius: var(--r-md);
+        padding: 10px 14px;
+        font-size: 14px;
+        box-shadow: var(--shadow);
+      }
+      input[type="time"]:focus {
+        outline: none;
+        border-color: var(--accent-line);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+      }
+      [data-mode="dark"] input[type="time"] {
+        color-scheme: dark;
+      }
+      .maintenance-copy {
+        margin: 8px 0 17px;
+        color: var(--mute);
+        font-size: 13px;
+        max-width: 70ch;
+      }
+      .maintenance-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .btn-danger {
+        border-color: rgba(192, 57, 43, 0.55);
+        color: var(--err);
+      }
+      .btn-danger:not(:disabled):hover {
+        background: rgba(192, 57, 43, 0.1);
+      }
+      .btn:disabled {
+        opacity: 0.48;
+        cursor: not-allowed;
+      }
+      .danger-card {
+        border-color: rgba(192, 57, 43, 0.36);
+      }
+      .confirm-action {
+        display: grid;
+        grid-template-columns: minmax(180px, 320px) auto;
+        gap: 10px;
+        align-items: end;
+      }
+      .confirm-action .field {
+        margin: 0;
+      }
+      @media (max-width: 560px) {
+        .layout-board.layout-0 {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .confirm-action {
+          grid-template-columns: 1fr;
+        }
+        .confirm-action .btn {
+          justify-content: center;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <button
+          type="button"
+          class="hamburger"
+          id="navToggle"
+          aria-label="Toggle navigation"
+          aria-expanded="false"
+        >
+          <span></span>
+        </button>
+        <div class="tb-brand">
+          <span class="brand-mark" aria-hidden="true"></span><span class="tb-name">TouchDeck</span
+          ><span class="tb-ver" id="topVersion">...</span>
+        </div>
+        <span class="tb-sep" aria-hidden="true"></span><span class="tb-crumb" id="crumb">Overview</span>
+        <div class="tb-right">
+          <div class="acc-pick" role="group" aria-label="Accent color">
+            <span class="lab">Accent</span
+            ><button type="button" class="acc-sw" data-accent-choice="green" aria-label="Green accent">
+              <i></i></button
+            ><button type="button" class="acc-sw" data-accent-choice="amber" aria-label="Amber accent">
+              <i></i>
+            </button>
+          </div>
+          <div class="mode-toggle" role="group" aria-label="Color mode">
+            <button type="button" data-mode-choice="light"><span class="sun"></span>Light</button
+            ><button type="button" data-mode-choice="dark"><span class="moon"></span>Dark</button>
+          </div>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <div class="nav-scrim" id="navScrim" aria-hidden="true"></div>
+        <aside class="sidebar">
+          <nav aria-label="Sections">
+            <div class="nav-group">
+              <div class="nav-label">Deck</div>
+              <button type="button" class="nav-item active" data-nav="overview">Overview</button
+              ><button type="button" class="nav-item hidden" data-nav="deck" id="navDeck">
+                Pages &amp; tiles
+              </button
+              ><button type="button" class="nav-item hidden" data-nav="printers" id="navPrinters">
+                Printers
+              </button
+              ><button type="button" class="nav-item" data-nav="apps">Apps</button>
+            </div>
+            <div class="nav-group">
+              <div class="nav-label">Configuration</div>
+              <button type="button" class="nav-item" data-nav="display">Display</button
+              ><button type="button" class="nav-item" data-nav="wallpapers">Wallpapers</button
+              ><button type="button" class="nav-item" data-nav="light">Screen</button
+              ><button type="button" class="nav-item" data-nav="hardware">Hardware</button
+              ><button type="button" class="nav-item" data-nav="clock">Time</button>
+            </div>
+            <div class="nav-group">
+              <div class="nav-label">Device</div>
+              <button type="button" class="nav-item" data-nav="network">Network</button
+              ><button type="button" class="nav-item" data-nav="advanced">Advanced</button
+              ><button type="button" class="nav-item" data-nav="maintenance">Maintenance</button>
+            </div>
+          </nav>
+          <div class="sidebar-spacer"></div>
+          <div class="status-block">
+            <div class="rail-label">Device status</div>
+            <div class="status-readout">
+              <div class="sr-head">
+                <span class="sr-led online" id="srLed"></span
+                ><span class="sr-title" id="srTitle">connecting...</span>
+              </div>
+              <dl class="sr-rows">
+                <div class="sr-row">
+                  <dt>ip</dt>
+                  <dd id="srIp">--</dd>
+                </div>
+                <div class="sr-row">
+                  <dt>host</dt>
+                  <dd id="srHost">--</dd>
+                </div>
+                <div class="sr-row">
+                  <dt>pc</dt>
+                  <dd id="srPc">--</dd>
+                </div>
+                <div class="sr-row">
+                  <dt>metrics</dt>
+                  <dd id="srMetrics">--</dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+          <div class="about">
+            <span>TouchDeck <b id="aboutVersion">...</b></span
+            ><span id="aboutBoard">ESP32</span>
+          </div>
+        </aside>
+
+        <main class="content">
+          <div class="content-inner">
+            <section class="page active" data-page="overview">
+              <div class="page-header">
+                <h1 class="page-h1">Overview</h1>
+                <p class="page-lede">
+                  Live device screen, PC telemetry, and firmware diagnostics.
+                </p>
+              </div>
+              <div class="overview-grid">
+                <div class="card preview-card">
+                  <div class="card-head">
+                    <h2 class="card-title">Device preview</h2>
+                    <span class="tag" id="previewSize">live</span>
+                  </div>
+                  <div class="screen-shell"><img id="screenPreview" alt="Current device screen" /></div>
+                  <div class="preview-controls">
+                    <label class="check-row standalone"
+                      ><input type="checkbox" id="previewAuto" checked /><span class="check-box"></span
+                      ><span class="check-text"
+                        ><strong>Auto-refresh</strong
+                        ><span class="ct-hint">Updates every 5 seconds.</span></span
+                      ></label
+                    ><button type="button" class="btn" id="previewNow">Refresh now</button>
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="card-head">
+                    <h2 class="card-title">PC stream</h2>
+                    <span class="tag" id="pcStateTag">waiting</span>
+                  </div>
+                  <dl class="facts">
+                    <div>
+                      <dt>Status</dt>
+                      <dd id="factPcStatus">--</dd>
+                    </div>
+                    <div>
+                      <dt>Last packet</dt>
+                      <dd id="factTimestamp">--</dd>
+                    </div>
+                    <div>
+                      <dt>Metrics</dt>
+                      <dd id="factMetricCount">--</dd>
+                    </div>
+                  </dl>
+                  <div class="chip-tray" id="overviewMetrics">
+                    <span class="chip-empty">Waiting for the PC companion.</span>
+                  </div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-head">
+                  <h2 class="card-title">Device diagnostics</h2>
+                  <span class="tag" id="diagBoard">ESP32</span>
+                </div>
+                <dl class="facts facts-4">
+                  <div>
+                    <dt>Free heap</dt>
+                    <dd id="diagHeap">--</dd>
+                  </div>
+                  <div>
+                    <dt>Largest block</dt>
+                    <dd id="diagBlock">--</dd>
+                  </div>
+                  <div>
+                    <dt>WiFi signal</dt>
+                    <dd id="diagRssi">--</dd>
+                  </div>
+                  <div>
+                    <dt>Uptime</dt>
+                    <dd id="diagUptime">--</dd>
+                  </div>
+                </dl>
+              </div>
+            </section>
+
+            <section class="page" data-page="deck" id="deckSection"></section>
+
+            <section class="page" data-page="printers">
+              <div class="page-header">
+                <h1 class="page-h1">Printers</h1>
+                <p class="page-lede">Bambu Lab printers on the deck, their errors and alerts.</p>
+              </div>
+              <div id="prnListHost"></div>
+              <form
+                id="printersForm"
+                class="portal-form"
+                data-endpoint="/save/printers"
+                data-save-label="Save printer settings"
+              >
+                <div class="card">
+                  <h2 class="card-title">Printer page</h2>
+                  <label class="check-row standalone"
+                    ><input type="checkbox" id="prnFollow" name="prnFollow" /><span class="check-box"></span
+                    ><span class="check-text"
+                      ><strong>Show the printer page while it prints</strong
+                      ><span class="ct-hint"
+                        >A print start wakes the deck and slides it to that printer's page. When the print is
+                        over, the deck goes back to the page it showed before, a minute after the bed is down
+                        to the bed cooled temperature below, or 30 minutes after the print at the latest. If
+                        you leave the printer page yourself, it stays where you are.</span
+                      ></span
+                    ></label
+                  >
+                  <p class="field-hint" style="margin: 12px 0 0">
+                    While a printer page is on the deck, the Glass wallpaper does not change on its own:
+                    printer pages take the memory a wallpaper change needs. A picture picked by hand still
+                    changes.
+                  </p>
+                </div>
+                <div class="card">
+                  <h2 class="card-title">Printer errors</h2>
+                  <div class="check-list">
+                    <label class="check-row"
+                      ><input type="checkbox" id="prnErrors" name="prnErrors" /><span class="check-box"></span
+                      ><span class="check-text"
+                        ><strong>Show printer errors</strong
+                        ><span class="ct-hint"
+                          >HMS codes and print errors with Bambu's own text: an ERROR badge on the printer tile,
+                          and a tap on it lists them. Off: no badge, list or alerts.</span
+                        ></span
+                      ></label
+                    >
+                    <label class="check-row"
+                      ><input type="checkbox" id="prnErrorsAll" name="prnErrorsAll" /><span class="check-box"></span
+                      ><span class="check-text"
+                        ><strong>Also common errors</strong
+                        ><span class="ct-hint"
+                          >Off: only fatal and serious errors raise the badge; common ones are still listed.</span
+                        ></span
+                      ></label
+                    >
+                    <label class="check-row"
+                      ><input type="checkbox" id="prnErrorWake" name="prnErrorWake" /><span class="check-box"></span
+                      ><span class="check-text"
+                        ><strong>Wake the deck and show the printer on a new error</strong
+                        ><span class="ct-hint"
+                          >Errors already standing when the deck connects do not wake it.</span
+                        ></span
+                      ></label
+                    >
+                  </div>
+                </div>
+                <div class="card">
+                  <h2 class="card-title">Bed cooled</h2>
+                  <label class="check-row standalone"
+                    ><input type="checkbox" id="prnCool" name="prnCool" /><span class="check-box"></span
+                    ><span class="check-text"
+                      ><strong>Tell me when the bed has cooled after a print</strong
+                      ><span class="ct-hint"
+                        >Wakes the deck with a message once the bed is down to the temperature below, so the
+                        print comes off the plate easily.</span
+                      ></span
+                    ></label
+                  >
+                  <div class="grid-2">
+                    <div class="field">
+                      <label class="field-label" for="prnCoolTemp">Bed temperature (&deg;C)</label>
+                      <input type="number" id="prnCoolTemp" name="prnCoolTemp" min="20" max="80" value="35" />
+                    </div>
+                  </div>
+                </div>
+              </form>
+            </section>
+
+            <section class="page" data-page="display">
+              <div class="page-header">
+                <h1 class="page-h1">Display</h1>
+                <p class="page-lede">Orientation, theme, the Glass look and PC metric tiles.</p>
+              </div>
+              <form
+                id="displayForm"
+                class="portal-form"
+                data-endpoint="/save/display"
+                data-save-label="Save display"
+              >
+                <div class="card">
+                  <h2 class="card-title">Screen</h2>
+                  <div class="grid-2">
+                    <div class="field">
+                      <label class="field-label" for="rotation">Rotation</label>
+                      <div class="select-wrap">
+                        <select id="rotation" name="rotation">
+                          <option value="0">Portrait</option>
+                          <option value="1">Landscape</option>
+                          <option value="2">Portrait, flipped</option>
+                          <option value="3">Landscape, flipped</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="theme">Theme</label>
+                      <div class="select-wrap">
+                        <select id="theme" name="theme">
+                          <option value="0">Midnight (dark)</option>
+                          <option value="1">Daylight (light)</option>
+                          <option value="2">Glass (wallpaper)</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="tileFx">Animations</label>
+                      <div class="select-wrap">
+                        <select id="tileFx" name="tileFx">
+                          <option value="0">Classic</option>
+                          <option value="1">Calm</option>
+                          <option value="2">Water</option>
+                          <option value="3">Glass</option>
+                          <option value="4">Heavy</option>
+                          <option value="5">Custom</option>
+                        </select>
+                      </div>
+                      <p class="field-hint">Calm: a ripple on touch, a glow when a tile turns on, pages crossfade and cards grow out of their tile. Water: drop rings on touch, the on colour floods out of your finger, a water edge between pages and cards appear in a spreading circle. Glass: a highlight under your finger and a springy release, a glossy sheen when a tile turns on, pages slide over each other in depth and cards rise like a glass sheet. Heavy (costs more): the tile bends like water under your finger, the fill drifts through aurora colours for a moment, tiles change page column by column and cards grow out of their tile. Custom: pick each one yourself.</p>
+                    </div>
+                    <div id="fxCustom" class="grid-2 grid-wide hidden">
+                    <div class="field">
+                      <label class="field-label" for="fxTouch">Touch</label>
+                      <div class="select-wrap">
+                        <select id="fxTouch" name="fxTouch">
+                          <option value="0">Shrink</option>
+                          <option value="1">Ripple ring</option>
+                          <option value="2">Water drop</option>
+                          <option value="3">Glass press</option>
+                          <option value="4">Water distortion</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="fxToggle">On / off change</label>
+                      <div class="select-wrap">
+                        <select id="fxToggle" name="fxToggle">
+                          <option value="0">Fill</option>
+                          <option value="1">Light bloom</option>
+                          <option value="2">Liquid fill</option>
+                          <option value="3">Glass sheen</option>
+                          <option value="4">Aurora fill</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="fxPage">Page change</label>
+                      <div class="select-wrap">
+                        <select id="fxPage" name="fxPage">
+                          <option value="0">Slide</option>
+                          <option value="1">Crossfade</option>
+                          <option value="2">Water edge</option>
+                          <option value="3">Depth</option>
+                          <option value="4">Column cascade</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="fxCard">Opening a card</label>
+                      <div class="select-wrap">
+                        <select id="fxCard" name="fxCard">
+                          <option value="0">None</option>
+                          <option value="1">Tile morph</option>
+                          <option value="2">Drop reveal</option>
+                          <option value="3">Glass sheet</option>
+                        </select>
+                      </div>
+                    </div>
+                    </div>
+                  </div>
+                  <label class="check-row standalone"
+                    ><input type="checkbox" id="printerFx" name="printerFx" /><span
+                      class="check-box"
+                    ></span
+                    ><span class="check-text"
+                      ><strong>Printer animations</strong
+                      ><span class="ct-hint"
+                        >Temperature tiles glow while heating and frost over while cooling, the filament
+                        tile shows a turning spool and a print head extruding while a print runs.</span
+                      ></span
+                    ></label
+                  >
+                </div>
+                <div class="card hidden" id="glassLook">
+                  <h2 class="card-title">Glass look</h2>
+                  <p class="field-hint" style="margin: 0 0 14px">
+                    The pictures behind the glass are set in <a href="#" data-page="wallpapers">Wallpapers</a>.
+                  </p>
+                  <div class="grid-2">
+                    <div class="field">
+                      <label class="field-label" for="glassTint">Tile opacity</label>
+                      <div class="range-row">
+                        <input type="range" id="glassTint" name="glassTint" min="0" max="90" step="5" /><span
+                          class="range-val"
+                          id="glassTintVal"
+                          >--</span
+                        >
+                      </div>
+                      <p class="field-hint" data-tip>How dark the glass of each tile is. 0 = clear glass.</p>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="glassBlur">Blur</label>
+                      <div class="range-row">
+                        <input type="range" id="glassBlur" name="glassBlur" min="0" max="24" step="2" /><span
+                          class="range-val"
+                          id="glassBlurVal"
+                          >--</span
+                        >
+                      </div>
+                      <p class="field-hint" data-tip>
+                        How frosted the glass looks. Off = plain see-through glass.
+                      </p>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="glassDim">Wallpaper dimming</label>
+                      <div class="range-row">
+                        <input type="range" id="glassDim" name="glassDim" min="0" max="60" step="5" /><span
+                          class="range-val"
+                          id="glassDimVal"
+                          >--</span
+                        >
+                      </div>
+                      <p class="field-hint" data-tip>
+                        Darkens the picture behind the tiles, for the text on it.
+                      </p>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="glassOn">On opacity</label>
+                      <div class="range-row">
+                        <input type="range" id="glassOn" name="glassOn" min="20" max="100" step="5" /><span
+                          class="range-val"
+                          id="glassOnVal"
+                          >--</span
+                        >
+                      </div>
+                      <p class="field-hint" data-tip>
+                        The colour fill of a tile that is on. Lower lets the picture show through; below 50%
+                        the tile also gets a coloured outline.
+                      </p>
+                    </div>
+                  </div>
+                  <label class="check-row standalone"
+                    ><input type="checkbox" id="glassAutoText" name="glassAutoText" /><span
+                      class="check-box"
+                    ></span
+                    ><span class="check-text"
+                      ><strong>Auto text colour</strong
+                      ><span class="ct-hint"
+                        >Picks light or dark text for each tile and the top bar from the picture behind it,
+                        and darkens the glass of a tile where neither would read well. Tiles with their own
+                        text colour keep it.</span
+                      ></span
+                    ></label
+                  >
+                </div>
+                <div class="card">
+                  <h2 class="card-title">PC metric tiles</h2>
+                  <div class="grid-2">
+                    <div class="field">
+                      <label class="field-label" for="tempScale">Default temperature scale</label>
+                      <div class="input-unit">
+                        <input type="number" id="tempScale" name="tempScale" min="1" max="500" /><span
+                          >C</span
+                        >
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="powerScale">Default power scale</label>
+                      <div class="input-unit">
+                        <input type="number" id="powerScale" name="powerScale" min="1" max="65535" /><span
+                          >W</span
+                        >
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="warnThreshold">Warning threshold</label>
+                      <div class="range-row">
+                        <input
+                          type="range"
+                          id="warnThreshold"
+                          name="warnThreshold"
+                          min="0"
+                          max="100"
+                          step="1"
+                        /><span class="range-val" id="warnThresholdVal">--</span>
+                      </div>
+                      <p class="field-hint">
+                        A metric tile turns amber at this share of its scale. 0 turns it off.
+                      </p>
+                    </div>
+                  </div>
+                  <p class="field-hint">The scales apply to tiles that set no full scale of their own.</p>
+                  <label class="check-row standalone"
+                    ><input type="checkbox" id="smoothCharts" name="smoothCharts" /><span
+                      class="check-box"
+                    ></span
+                    ><span class="check-text"
+                      ><strong>Smooth chart motion</strong
+                      ><span class="ct-hint"
+                        >Charts glide between PC updates instead of stepping once a second. Uses more
+                        processor time while a page with a PC chart is on screen.</span
+                      ></span
+                    ></label
+                  >
+                </div>
+              </form>
+            </section>
+
+            <section class="page" data-page="wallpapers">
+              <div class="page-header">
+                <h1 class="page-h1">Wallpapers</h1>
+                <p class="page-lede">
+                  Pictures shown behind the tiles by the Glass theme and by the photo frame while the screen
+                  sleeps.
+                </p>
+              </div>
+              <form
+                id="wallForm"
+                class="portal-form"
+                data-endpoint="/save/wallpapers"
+                data-save-label="Save wallpapers"
+              >
+                <div class="card">
+                  <h2 class="card-title">Pictures</h2>
+                  <p class="field-hint" style="margin: 0 0 14px">
+                    Add pictures separately for each orientation. This browser crops them to fit and stores
+                    JPEGs on the device. Glass uses the old single picture or a built-in gradient when a
+                    gallery is empty. Show now pins a picture for the next boot. Config backups include the
+                    settings, not the pictures.
+                  </p>
+                  <div class="grid-2">
+                    <div class="field">
+                      <label class="field-label" for="wallSource">Pictures</label>
+                      <div class="select-wrap">
+                        <select id="wallSource" name="wallSource">
+                          <option value="0">My pictures</option>
+                          <option value="1">Daily pictures (Windows Spotlight)</option>
+                          <option value="2">Both</option>
+                        </select>
+                      </div>
+                      <p class="field-hint" data-tip>
+                        Daily downloads Windows Spotlight pictures once a day. Internal storage replaces the
+                        previous set; microSD keeps an archive. Both mixes daily and your own pictures.
+                      </p>
+                    </div>
+                  </div>
+                  <p id="sdWallState" class="field-hint" role="status"></p>
+                  <div id="dailyFields" class="hidden" style="margin-top: 14px">
+                    <div class="grid-2">
+                      <div class="field">
+                        <label class="field-label" for="dailyOrient">Download for</label>
+                        <div class="select-wrap">
+                          <select id="dailyOrient" name="dailyOrient">
+                            <option value="0">Landscape</option>
+                            <option value="1">Portrait</option>
+                            <option value="2">Both</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div class="field">
+                        <label class="field-label" for="dailyCount">Pictures per day</label>
+                        <div class="select-wrap">
+                          <select id="dailyCount" name="dailyCount">
+                            <option value="4">4</option>
+                            <option value="6">6</option>
+                            <option value="8">8</option>
+                            <option value="12">12</option>
+                            <option value="16">16</option>
+                            <option value="20">20</option>
+                            <option value="24">24</option>
+                            <option value="32">32</option>
+                          </select>
+                        </div>
+                        <p class="field-hint" data-tip>
+                          Counts above 16 require a mounted microSD card. For each orientation, 12 take about
+                          5 minutes. Swipes can stutter meanwhile; a thin line at the top of the screen shows
+                          the download.
+                        </p>
+                      </div>
+                      <div class="field">
+                        <label class="field-label" for="dailyMax">Daily archive per orientation (microSD)</label>
+                        <div class="select-wrap">
+                          <select id="dailyMax" name="dailyMax">
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                            <option value="200">200</option>
+                            <option value="500">500</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div class="field">
+                        <label class="field-label" for="dailyHour">Download at</label>
+                        <div class="select-wrap">
+                          <select id="dailyHour" name="dailyHour"></select>
+                        </div>
+                        <p class="field-hint" data-tip>
+                          Waits until nobody has touched the screen for 30 seconds. If the deck was off at
+                          this hour, it waits for the next day; Download now fetches at once.
+                        </p>
+                      </div>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px">
+                      <button type="button" class="btn" id="dailyFetch">Download now</button
+                      ><span id="dailyState" role="status" class="field-hint" style="margin: 0"></span>
+                    </div>
+                  </div>
+                  <div class="field hidden" id="wallBrowseField">
+                    <label class="field-label" for="wallBrowse">Browse gallery</label>
+                    <div class="select-wrap">
+                      <select id="wallBrowse">
+                        <option value="m">My pictures</option>
+                        <option value="d" selected>Daily pictures</option>
+                      </select>
+                    </div>
+                  </div>
+                  <section
+                    id="wallGallery_l"
+                    style="margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px"
+                  >
+                    <h3>Landscape</h3>
+                    <p class="field-hint" id="wallHint_l">Add pictures or drop them here.</p>
+                    <input type="file" id="wallFile_l" multiple accept="image/*" hidden />
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap">
+                      <button type="button" class="btn" id="wallPick_l">Add pictures</button
+                      ><button type="button" class="btn" id="wallShow_l" disabled>Show now</button
+                      ><button type="button" class="btn" id="wallDelete_l" disabled>Delete selected</button
+                      ><button type="button" class="btn" id="wallAll_l" disabled>Delete all</button>
+                    </div>
+                    <p id="wallSpace_l" class="field-hint"></p>
+                    <p id="wallProgress_l" role="status" class="field-hint"></p>
+                    <div id="wallLegacy_l" class="field-hint"></div>
+                    <div
+                      id="wallGrid_l"
+                      style="
+                        display: grid;
+                        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+                        gap: 8px;
+                        margin-top: 12px;
+                      "
+                    ></div>
+                    <button type="button" class="btn hidden" id="wallMore_l">Show more</button>
+                    <div id="wallErrors_l" role="status" class="field-hint"></div>
+                  </section>
+                  <section
+                    id="wallGallery_p"
+                    style="margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px"
+                  >
+                    <h3>Portrait</h3>
+                    <p class="field-hint" id="wallHint_p">Add pictures or drop them here.</p>
+                    <input type="file" id="wallFile_p" multiple accept="image/*" hidden />
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap">
+                      <button type="button" class="btn" id="wallPick_p">Add pictures</button
+                      ><button type="button" class="btn" id="wallShow_p" disabled>Show now</button
+                      ><button type="button" class="btn" id="wallDelete_p" disabled>Delete selected</button
+                      ><button type="button" class="btn" id="wallAll_p" disabled>Delete all</button>
+                    </div>
+                    <p id="wallSpace_p" class="field-hint"></p>
+                    <p id="wallProgress_p" role="status" class="field-hint"></p>
+                    <div id="wallLegacy_p" class="field-hint"></div>
+                    <div
+                      id="wallGrid_p"
+                      style="
+                        display: grid;
+                        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+                        gap: 8px;
+                        margin-top: 12px;
+                      "
+                    ></div>
+                    <button type="button" class="btn hidden" id="wallMore_p">Show more</button>
+                    <div id="wallErrors_p" role="status" class="field-hint"></div>
+                  </section>
+                </div>
+                <div class="card">
+                  <h2 class="card-title">Glass theme</h2>
+                  <p class="field-hint" style="margin: 0 0 14px">
+                    How the Glass background changes. The photo frame has its own interval in
+                    <a href="#" data-page="light">Screen &gt; Sleep</a>.
+                  </p>
+                  <div class="grid-2">
+                    <div class="field">
+                      <label class="field-label" for="wallEvery">Change every</label>
+                      <div class="select-wrap">
+                        <select id="wallEvery" name="wallEvery">
+                          <option value="0">Off</option>
+                          <option value="1">1 min</option>
+                          <option value="2">2 min</option>
+                          <option value="5">5 min</option>
+                          <option value="10">10 min</option>
+                          <option value="15">15 min</option>
+                          <option value="30">30 min</option>
+                          <option value="60">60 min</option>
+                        </select>
+                      </div>
+                      <p class="field-hint" data-tip>
+                        A new picture after this time, once nobody has touched the screen for 30 seconds.
+                        Paused while a printer page is on the deck.
+                      </p>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="wallOrder">Order</label>
+                      <div class="select-wrap">
+                        <select id="wallOrder" name="wallOrder">
+                          <option value="0">In order</option>
+                          <option value="1">Shuffle</option>
+                        </select>
+                      </div>
+                      <p class="field-hint" data-tip>
+                        In order follows the upload order. Shuffle shows every picture once before any
+                        repeats.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            </section>
+
+            <section class="page" data-page="light">
+              <div class="page-header">
+                <h1 class="page-h1">Screen</h1>
+                <p class="page-lede">Screen brightness, the night schedule and sleep.</p>
+              </div>
+              <form
+                id="lightForm"
+                class="portal-form"
+                data-endpoint="/save/light"
+                data-save-label="Save screen"
+              >
+                <div class="card">
+                  <div class="card-head">
+                    <h2 class="card-title">Brightness</h2>
+                    <span class="tag" id="backlightState">day</span>
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="brightness">Day brightness</label>
+                    <div class="range-row">
+                      <input
+                        type="range"
+                        id="brightness"
+                        name="brightness"
+                        min="0"
+                        max="255"
+                        step="1"
+                      /><span class="range-val" id="brightnessVal">--</span>
+                    </div>
+                  </div>
+                  <label class="check-row standalone"
+                    ><input type="checkbox" id="nightEnabled" name="nightEnabled" /><span
+                      class="check-box"
+                    ></span
+                    ><span class="check-text"
+                      ><strong>Night brightness schedule</strong
+                      ><span class="ct-hint"
+                        >Use a separate brightness level during the configured local-time interval.</span
+                      ></span
+                    ></label
+                  >
+                  <div class="subcard hidden" id="nightScheduleFields">
+                    <div class="field">
+                      <label class="field-label" for="nightBrightness">Night brightness</label>
+                      <div class="range-row">
+                        <input
+                          type="range"
+                          id="nightBrightness"
+                          name="nightBrightness"
+                          min="0"
+                          max="255"
+                          step="1"
+                        /><span class="range-val" id="nightBrightnessVal">--</span>
+                      </div>
+                      <p class="field-hint">
+                        Set to 0 to switch the backlight fully off at night; a touch then lights it at 10% for a
+                        minute.
+                      </p>
+                    </div>
+                    <div class="grid-2">
+                      <div class="field">
+                        <label class="field-label" for="nightStart">Night starts</label
+                        ><input type="time" id="nightStart" name="nightStart" step="60" />
+                      </div>
+                      <div class="field">
+                        <label class="field-label" for="nightEnd">Night ends</label
+                        ><input type="time" id="nightEnd" name="nightEnd" step="60" />
+                      </div>
+                    </div>
+                    <p class="field-hint">Matching start and end times disable the night interval.</p>
+                  </div>
+                  <div class="note">
+                    <span class="note-k">Time</span
+                    ><span
+                      >The schedule uses the timezone set on the Time page. Until network time is available,
+                      day brightness remains active.</span
+                    >
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="card-head">
+                    <h2 class="card-title">Sleep</h2>
+                    <span class="tag" id="sleepState">-</span>
+                  </div>
+                  <div class="grid-2">
+                    <div class="field">
+                      <label class="field-label" for="sleepMin">Sleep after (minutes)</label
+                      ><input type="number" id="sleepMin" name="sleepMin" min="0" max="1440" step="1" />
+                      <p class="field-hint">Without touch and without presence. 0 = never.</p>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="sleepMode">When asleep</label>
+                      <div class="select-wrap">
+                        <select id="sleepMode" name="sleepMode">
+                          <option value="off">Screen off</option>
+                          <option value="dim">Dim</option>
+                          <option value="frame">Photo frame</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="hidden" id="sleepFrameFields" style="margin-bottom: 14px">
+                    <div class="field">
+                      <label class="field-label" for="frameEvery">Change picture every</label>
+                      <div class="select-wrap">
+                        <select id="frameEvery" name="frameEvery">
+                          <option value="1">1 minute</option>
+                          <option value="2">2 minutes</option>
+                          <option value="5" selected>5 minutes</option>
+                          <option value="10">10 minutes</option>
+                          <option value="15">15 minutes</option>
+                          <option value="30">30 minutes</option>
+                        </select>
+                      </div>
+                      <p class="field-hint">
+                        Shows the wallpaper gallery (<a href="#" data-page="wallpapers">Wallpapers</a>) in any theme. At night it uses the
+                        night brightness; the screen turns off when that is 0 or the gallery is empty.
+                        Pictures on a microSD card: enable it in
+                        <a href="#" data-page="maintenance">Maintenance &gt; microSD card</a>.
+                      </p>
+                    </div>
+                    <label class="check-row standalone"
+                      ><input type="checkbox" id="frameClock" name="frameClock" checked /><span class="check-box"></span
+                      ><span class="check-text"><strong>Show clock and date</strong></span></label
+                    >
+                    <label class="check-row standalone"
+                      ><input type="checkbox" id="frameAnim" name="frameAnim" checked /><span class="check-box"></span
+                      ><span class="check-text"><strong>Animate tiles</strong></span></label
+                    >
+                  </div>
+                  <div class="field hidden" id="sleepDimField">
+                    <label class="field-label" for="sleepDim">Dim to</label>
+                    <div class="range-row">
+                      <input type="range" id="sleepDim" name="sleepDim" min="1" max="60" step="1" value="10" /><span
+                        class="range-val"
+                        id="sleepDimVal"
+                        >--</span
+                      >
+                    </div>
+                  </div>
+                  <p class="field-hint">
+                    Presence keeps the screen awake, and its arrival wakes it, also after Off in the quick
+                    panel. A touch always wakes it; that first touch does nothing else.
+                  </p>
+                  <label class="check-row standalone"
+                    ><input type="checkbox" id="presencePc" name="presencePc" /><span class="check-box"></span
+                    ><span class="check-text"
+                      ><strong>A PC online counts as presence</strong
+                      ><span class="ct-hint">Any PC sending metrics through the companion.</span></span
+                    ></label
+                  >
+                  <label class="check-row standalone"
+                    ><input type="checkbox" id="presencePrinting" name="presencePrinting" /><span class="check-box"></span
+                    ><span class="check-text"
+                      ><strong>A printer printing counts as presence</strong
+                      ><span class="ct-hint">Preparing, printing or paused, on any printer on the deck.</span></span
+                    ></label
+                  >
+                  <label class="check-row standalone"
+                    ><input type="checkbox" id="nightWake" name="nightWake" /><span class="check-box"></span
+                    ><span class="check-text"
+                      ><strong>Night wake brightness</strong
+                      ><span class="ct-hint"
+                        >During the night brightness schedule, presence lights the screen at this level. It holds
+                        for the sleep time after presence ends.</span
+                      ></span
+                    ></label
+                  >
+                  <div class="subcard hidden" id="nightWakeFields">
+                    <div class="field">
+                      <label class="field-label" for="nightWakeLevel">Night wake level</label>
+                      <div class="range-row">
+                        <input
+                          type="range"
+                          id="nightWakeLevel"
+                          name="nightWakeLevel"
+                          min="1"
+                          max="255"
+                          step="1"
+                          value="128"
+                        /><span class="range-val" id="nightWakeLevelVal">--</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            </section>
+
+            <section class="page" data-page="hardware">
+              <div class="page-header">
+                <h1 class="page-h1">Hardware</h1>
+                <p class="page-lede">The speaker, a status LED and a vibration motor.</p>
+              </div>
+              <form
+                id="hardwareForm"
+                class="portal-form"
+                data-endpoint="/save/hardware"
+                data-save-label="Save hardware"
+              >
+                <div class="card" id="audioCard">
+                  <div class="card-head">
+                    <h2 class="card-title">Speaker</h2>
+                    <span class="tag" id="audioState">disabled</span>
+                  </div>
+                  <label class="check-row standalone"
+                    ><input type="checkbox" id="audioEnabled" name="audioEnabled" /><span class="check-box"></span
+                    ><span class="check-text"
+                      ><strong>Enable the speaker</strong
+                      ><span class="ct-hint"
+                        >Sounds for printer events and tile taps, through the board's built-in amplifier and a
+                        small speaker on its speaker connector.</span
+                      ></span
+                    ></label
+                  >
+                  <div class="subcard hidden" id="audioFields">
+                    <div class="field">
+                      <label class="field-label" for="audioVolume">Volume</label>
+                      <div class="range-row">
+                        <input type="range" id="audioVolume" name="audioVolume" min="0" max="100" step="5" /><span
+                          class="range-val"
+                          id="audioVolumeVal"
+                          >--</span
+                        >
+                      </div>
+                    </div>
+                    <div class="check-list">
+                      <label class="check-row"
+                        ><input type="checkbox" id="audioNight" name="audioNight" /><span class="check-box"></span
+                        ><span class="check-text"
+                          ><strong>Quiet at night</strong
+                          ><span class="ct-hint"
+                            >Silent while the night schedule on the <a href="#" data-page="light">Screen</a> page
+                            is active.</span
+                          ></span
+                        ></label
+                      ><label class="check-row"
+                        ><input type="checkbox" id="audioClick" name="audioClick" /><span class="check-box"></span
+                        ><span class="check-text"
+                          ><strong>Click on tile taps</strong
+                          ><span class="ct-hint">A short tick each time a tile is tapped or held.</span></span
+                        ></label
+                      >
+                    </div>
+                    <div class="audio-events">
+                      <div class="audio-event">
+                        <label class="check-row"
+                          ><input type="checkbox" id="audioFinished" name="audioFinished" /><span
+                            class="check-box"
+                          ></span
+                          ><span class="check-text"><strong>Print finished</strong></span></label
+                        >
+                        <div class="audio-pick">
+                          <select id="audioFileFinished" name="audioFileFinished" aria-label="Print finished sound"></select
+                          ><button type="button" class="btn" data-audio-test="finished">Test</button>
+                        </div>
+                      </div>
+                      <div class="audio-event">
+                        <label class="check-row"
+                          ><input type="checkbox" id="audioError" name="audioError" /><span class="check-box"></span
+                          ><span class="check-text"
+                            ><strong>Printer error</strong
+                            ><span class="ct-hint">New errors only, as set on the Printers page.</span></span
+                          ></label
+                        >
+                        <div class="audio-pick">
+                          <select id="audioFileError" name="audioFileError" aria-label="Printer error sound"></select
+                          ><button type="button" class="btn" data-audio-test="error">Test</button>
+                        </div>
+                      </div>
+                      <div class="audio-event">
+                        <label class="check-row"
+                          ><input type="checkbox" id="audioCooled" name="audioCooled" /><span class="check-box"></span
+                          ><span class="check-text"
+                            ><strong>Bed cooled</strong
+                            ><span class="ct-hint">With the bed cooled alert on the Printers page.</span></span
+                          ></label
+                        >
+                        <div class="audio-pick">
+                          <select id="audioFileCooled" name="audioFileCooled" aria-label="Bed cooled sound"></select
+                          ><button type="button" class="btn" data-audio-test="cooled">Test</button>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <span class="field-label">Your sounds</span>
+                      <div id="audioFiles" class="audio-files"></div>
+                      <input type="file" id="audioFile" accept=".wav,audio/wav,audio/x-wav" hidden />
+                      <div style="display: flex; gap: 8px; flex-wrap: wrap">
+                        <button type="button" class="btn" id="audioPick">Add a WAV file</button
+                        ><button type="button" class="btn" data-audio-test="click">Test click</button>
+                      </div>
+                      <p class="field-hint" id="audioFilesHint">
+                        16-bit PCM WAV, mono or stereo, 8 to 48 kHz, up to 4 MB. Test buttons play the picked sound
+                        at the volume above, before saving.
+                      </p>
+                    </div>
+                  </div>
+                  <div class="note">
+                    <span class="note-k">Storage</span
+                    ><span
+                      >Sounds are stored on the microSD card. Without a card they go to the internal flash, which
+                      has little room.</span
+                    >
+                  </div>
+                </div>
+                <div class="card" id="ledCard">
+                  <div class="card-head">
+                    <h2 class="card-title">Status LED</h2>
+                    <span class="tag" id="ledState">disabled</span>
+                  </div>
+                  <label class="check-row standalone"
+                    ><input type="checkbox" id="ledEnabled" name="ledEnabled" /><span class="check-box"></span
+                    ><span class="check-text"
+                      ><strong>Enable status LED</strong
+                      ><span class="ct-hint"
+                        >A single-color LED on a GPIO, dimmed by PWM through a transistor driver. Not an
+                        addressable strip, so there is no color to pick.</span
+                      ></span
+                    ></label
+                  >
+                  <div class="subcard hidden" id="ledFields">
+                    <div class="grid-2">
+                      <div class="field">
+                        <label class="field-label" for="ledPin">Signal GPIO</label
+                        ><input type="number" id="ledPin" name="ledPin" min="0" max="48" step="1" />
+                        <p class="field-hint">Allowed on this board: <span id="ledAllowedPins">--</span>.</p>
+                      </div>
+                      <div class="field">
+                        <label class="field-label" for="ledBrightness">Brightness</label>
+                        <div class="range-row">
+                          <input
+                            type="range"
+                            id="ledBrightness"
+                            name="ledBrightness"
+                            min="0"
+                            max="255"
+                            step="1"
+                          /><span class="range-val" id="ledBrightnessVal">--</span>
+                        </div>
+                        <p class="field-hint">The LED follows the slider live while this page is open.</p>
+                      </div>
+                    </div>
+                    <label class="check-row standalone"
+                      ><input type="checkbox" id="ledNightEnabled" name="ledNightEnabled" /><span
+                        class="check-box"
+                      ></span
+                      ><span class="check-text"
+                        ><strong>Dim at night</strong
+                        ><span class="ct-hint"
+                          >Use a separate level during its own local-time interval, independent of the screen.</span
+                        ></span
+                      ></label
+                    >
+                    <div class="subcard hidden" id="ledNightFields">
+                      <div class="field">
+                        <label class="field-label" for="ledNightBrightness">Night brightness</label>
+                        <div class="range-row">
+                          <input
+                            type="range"
+                            id="ledNightBrightness"
+                            name="ledNightBrightness"
+                            min="0"
+                            max="255"
+                            step="1"
+                          /><span class="range-val" id="ledNightBrightnessVal">--</span>
+                        </div>
+                        <p class="field-hint">Set to 0 to switch the LED fully off at night.</p>
+                      </div>
+                      <div class="grid-2">
+                        <div class="field">
+                          <label class="field-label" for="ledNightStart">Night starts</label
+                          ><input type="time" id="ledNightStart" name="ledNightStart" step="60" />
+                        </div>
+                        <div class="field">
+                          <label class="field-label" for="ledNightEnd">Night ends</label
+                          ><input type="time" id="ledNightEnd" name="ledNightEnd" step="60" />
+                        </div>
+                      </div>
+                      <p class="field-hint">Matching start and end times disable the night interval.</p>
+                    </div>
+                    <div class="check-list">
+                      <label class="check-row"
+                        ><input type="checkbox" id="ledFollowDisplay" name="ledFollowDisplay" /><span
+                          class="check-box"
+                        ></span
+                        ><span class="check-text"
+                          ><strong>Off while the display is off</strong
+                          ><span class="ct-hint"
+                            >Covers the manual off gesture, the PC-offline sleep timer, and a night brightness
+                            of zero.</span
+                          ></span
+                        ></label
+                      ><label class="check-row"
+                        ><input type="checkbox" id="ledOfflineOff" name="ledOfflineOff" /><span
+                          class="check-box"
+                        ></span
+                        ><span class="check-text"
+                          ><strong>Off while the PC is offline</strong
+                          ><span class="ct-hint"
+                            >Dark whenever no telemetry has arrived recently, even if the panel stays
+                            on.</span
+                          ></span
+                        ></label
+                      >
+                    </div>
+                  </div>
+                  <div class="note">
+                    <span class="note-k">Wiring</span
+                    ><span
+                      >Drive the LED through a transistor, not straight off the GPIO. A pin already used by
+                      the display, touch, USB or flash is refused.</span
+                    >
+                  </div>
+                </div>
+                <div class="card" id="hapticCard">
+                  <div class="card-head">
+                    <h2 class="card-title">Vibration motor</h2>
+                  </div>
+                  <label class="check-row standalone"
+                    ><input type="checkbox" id="hapticEnabled" name="hapticEnabled" /><span class="check-box"></span
+                    ><span class="check-text"
+                      ><strong>Vibrate on tile taps</strong
+                      ><span class="ct-hint"
+                        >A vibration motor module on a GPIO gives a short pulse each time a tile is tapped or
+                        held on the screen.</span
+                      ></span
+                    ></label
+                  >
+                  <div class="subcard hidden" id="hapticFields">
+                    <div class="grid-2">
+                      <div class="field">
+                        <label class="field-label" for="hapticPin">Signal GPIO</label
+                        ><input type="number" id="hapticPin" name="hapticPin" min="0" max="48" step="1" />
+                        <p class="field-hint">
+                          Allowed on this board: <span id="hapticAllowedPins">--</span>. Not the status LED's pin.
+                        </p>
+                      </div>
+                      <div class="field">
+                        <label class="field-label" for="hapticStrength">Strength</label>
+                        <div class="range-row">
+                          <input
+                            type="range"
+                            id="hapticStrength"
+                            name="hapticStrength"
+                            min="20"
+                            max="100"
+                            step="5"
+                          /><span class="range-val" id="hapticStrengthVal">--</span>
+                        </div>
+                        <p class="field-hint">A low level may not start the motor at all.</p>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="hapticMs">Pulse length</label>
+                      <div class="range-row">
+                        <input type="range" id="hapticMs" name="hapticMs" min="10" max="200" step="5" /><span
+                          class="range-val"
+                          id="hapticMsVal"
+                          >--</span
+                        >
+                      </div>
+                    </div>
+                    <button type="button" class="btn" id="hapticTest">Test</button>
+                  </div>
+                  <div class="note">
+                    <span class="note-k">Wiring</span
+                    ><span
+                      >Module VCC to 5 V, GND to GND, the signal input to the GPIO. The motor needs about 3.7 V
+                      to start, so 3.3 V is not enough for VCC.</span
+                    >
+                  </div>
+                </div>
+              </form>
+            </section>
+
+            <section class="page" data-page="apps">
+              <div class="page-header">
+                <h1 class="page-h1">Apps</h1>
+                <p class="page-lede">
+                  Ajustes de las apps del companion. Las apps se colocan en Pages &amp; tiles con "+ Add app".
+                </p>
+              </div>
+              <form id="appsForm" class="portal-form" data-endpoint="/save/apps" data-save-label="Guardar">
+                <div class="card">
+                  <h2 class="card-title">Ubicación</h2>
+                  <p class="field-hint" style="margin-top:0">Centro del radar y lugar del tiempo de la barra superior.</p>
+                  <div class="field">
+                    <label class="field-label" for="citySearch">Buscar ciudad</label>
+                    <div style="display:flex;gap:8px">
+                      <input type="text" id="citySearch" placeholder="Madrid, Sevilla..." autocomplete="off" />
+                      <button type="button" class="btn" id="citySearchBtn">Buscar</button>
+                    </div>
+                    <div id="cityResults" class="field-hint"></div>
+                  </div>
+                  <div class="grid-2">
+                    <div class="field">
+                      <label class="field-label" for="city">Nombre</label>
+                      <input type="text" id="city" name="city" maxlength="40" />
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="lat">Latitud</label>
+                      <input type="text" id="lat" name="lat" inputmode="decimal" maxlength="12" />
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="lon">Longitud</label>
+                      <input type="text" id="lon" name="lon" inputmode="decimal" maxlength="12" />
+                    </div>
+                  </div>
+                </div>
+                <div class="card">
+                  <h2 class="card-title">Radar de vuelos</h2>
+                  <div class="grid-2">
+                    <div class="field">
+                      <label class="field-label" for="radarKm">Radio</label>
+                      <div class="select-wrap">
+                        <select id="radarKm" name="radarKm">
+                          <option value="10">10 km</option>
+                          <option value="25">25 km</option>
+                          <option value="50">50 km</option>
+                          <option value="100">100 km</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="radarGnd">Mostrar</label>
+                      <div class="select-wrap">
+                        <select id="radarGnd" name="radarGnd">
+                          <option value="0">En vuelo</option>
+                          <option value="1">En tierra</option>
+                          <option value="2">Todos</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  <p class="field-hint">
+                    Datos de adsb.lol, cada 12 s mientras el radar está abierto. En la pantalla el radio se cambia
+                    tocando "RADIO" y el filtro con el botón del panel.
+                  </p>
+                </div>
+              </form>
+            </section>
+
+            <section class="page" data-page="clock">
+              <div class="page-header">
+                <h1 class="page-h1">Time</h1>
+                <p class="page-lede">
+                  Clock format and the timezone for the top bar clock and the night schedule.
+                </p>
+              </div>
+              <form
+                id="clockForm"
+                class="portal-form"
+                data-endpoint="/save/clock"
+                data-save-label="Save time"
+              >
+                <div class="card">
+                  <h2 class="card-title">Clock</h2>
+                  <div class="grid-2">
+                    <div class="field">
+                      <label class="field-label" for="timeFormat">Time format</label>
+                      <div class="select-wrap">
+                        <select id="timeFormat" name="timeFormat">
+                          <option value="24">24-hour</option>
+                          <option value="12">12-hour</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="card">
+                  <h2 class="card-title">Timezone</h2>
+                  <div class="field">
+                    <label class="field-label" for="timezonePreset">Timezone preset</label>
+                    <div class="select-wrap">
+                      <select id="timezonePreset">
+                        <option value="">Custom or UTC</option>
+                        <option value="UTC0">UTC</option>
+                        <option value="GMT0BST,M3.5.0/1,M10.5.0/2">United Kingdom</option>
+                        <option value="CET-1CEST,M3.5.0/2,M10.5.0/3">Central Europe</option>
+                        <option value="EET-2EEST,M3.5.0/3,M10.5.0/4">Eastern Europe</option>
+                        <option value="EST5EDT,M3.2.0/2,M11.1.0/2">US Eastern</option>
+                        <option value="CST6CDT,M3.2.0/2,M11.1.0/2">US Central</option>
+                        <option value="MST7MDT,M3.2.0/2,M11.1.0/2">US Mountain</option>
+                        <option value="PST8PDT,M3.2.0/2,M11.1.0/2">US Pacific</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="timezone">POSIX timezone string</label
+                    ><input
+                      type="text"
+                      id="timezone"
+                      name="timezone"
+                      maxlength="63"
+                      placeholder="CET-1CEST,M3.5.0/2,M10.5.0/3"
+                    />
+                    <p class="field-hint">
+                      Use a preset or enter a POSIX timezone rule. Leave empty for the firmware default.
+                    </p>
+                  </div>
+                </div>
+              </form>
+            </section>
+
+            <section class="page" data-page="network">
+              <div class="page-header">
+                <h1 class="page-h1">Network</h1>
+                <p class="page-lede">
+                  WiFi, address, and device identity changes are applied after a restart.
+                </p>
+              </div>
+              <form
+                id="networkForm"
+                class="portal-form"
+                data-endpoint="/save/network"
+                data-save-label="Save &amp; restart"
+              >
+                <div class="card">
+                  <h2 class="card-title">WiFi</h2>
+                  <div class="grid-2">
+                    <div class="field">
+                      <label class="field-label" for="wifiSsid">Network name</label
+                      ><input type="text" id="wifiSsid" name="ssid" maxlength="32" autocomplete="off" />
+                    </div>
+                    <div class="field">
+                      <label class="field-label" for="wifiPass">Password</label
+                      ><input
+                        type="password"
+                        id="wifiPass"
+                        name="pass"
+                        maxlength="64"
+                        placeholder="Unchanged if left empty"
+                        autocomplete="new-password"
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div class="card">
+                  <h2 class="card-title">Device identity</h2>
+                  <div class="field">
+                    <label class="field-label" for="hostname">Hostname</label>
+                    <div class="input-suffix">
+                      <input type="text" id="hostname" name="hostname" maxlength="31" /><span>.local</span>
+                    </div>
+                  </div>
+                  <div class="check-list">
+                    <label class="check-row"
+                      ><input type="checkbox" id="mdns" name="mdns" /><span class="check-box"></span
+                      ><span class="check-text"
+                        ><strong>Advertise with mDNS</strong
+                        ><span class="ct-hint">Makes the portal available at the hostname above.</span></span
+                      ></label
+                    ><label class="check-row"
+                      ><input type="checkbox" id="showIp" name="showIp" /><span class="check-box"></span
+                      ><span class="check-text"
+                        ><strong>Show IP address at startup</strong
+                        ><span class="ct-hint"
+                          >Briefly displays the assigned address after WiFi connects.</span
+                        ></span
+                      ></label
+                    >
+                  </div>
+                </div>
+                <div class="card">
+                  <h2 class="card-title">IP configuration</h2>
+                  <div class="field">
+                    <label class="field-label" for="ipMode">Address mode</label>
+                    <div class="select-wrap">
+                      <select id="ipMode" name="ipMode">
+                        <option value="dhcp">Automatic, DHCP</option>
+                        <option value="static">Static address</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div id="staticFields" class="subcard hidden">
+                    <div class="grid-2">
+                      <div class="field">
+                        <label class="field-label" for="staticIp">IP address</label
+                        ><input type="text" id="staticIp" name="staticIp" inputmode="decimal" />
+                      </div>
+                      <div class="field">
+                        <label class="field-label" for="gateway">Gateway</label
+                        ><input type="text" id="gateway" name="gateway" inputmode="decimal" />
+                      </div>
+                      <div class="field">
+                        <label class="field-label" for="subnet">Subnet mask</label
+                        ><input type="text" id="subnet" name="subnet" inputmode="decimal" />
+                      </div>
+                      <div class="field">
+                        <label class="field-label" for="dns">DNS server</label
+                        ><input
+                          type="text"
+                          id="dns"
+                          name="dns"
+                          inputmode="decimal"
+                          placeholder="Defaults to gateway"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            </section>
+
+            <section class="page" data-page="advanced">
+              <div class="page-header">
+                <h1 class="page-h1">Advanced</h1>
+                <p class="page-lede">Optional features that are off unless you need them.</p>
+              </div>
+              <form
+                id="advancedForm"
+                class="portal-form"
+                data-endpoint="/save/advanced"
+                data-save-label="Save advanced"
+              >
+                <div class="card">
+                  <h2 class="card-title">Printers</h2>
+                  <label class="check-row standalone"
+                    ><input type="checkbox" id="printersEnabled" name="printers" /><span
+                      class="check-box"
+                    ></span
+                    ><span class="check-text"
+                      ><strong>Bambu Lab printers over LAN</strong
+                      ><span class="ct-hint"
+                        >The deck connects to the printers itself and shows them on printer pages and tiles,
+                        set up on the <a href="#" data-page="printers">Printers</a> page. Off: no printer
+                        connections, and printer pages, tiles and settings are hidden. Their setup stays stored and comes back when this is turned
+                        on again.</span
+                      ></span
+                    ></label
+                  >
+                </div>
+              </form>
+            </section>
+
+            <section class="page" data-page="maintenance">
+              <div class="page-header">
+                <h1 class="page-h1">Maintenance</h1>
+                <p class="page-lede">
+                  Back up device settings, install firmware, set up the microSD card, or return the monitor to first-run setup.
+                </p>
+              </div>
+              <div class="card">
+                <h2 class="card-title">Configuration backup</h2>
+                <p class="maintenance-copy">
+                  Export the deck pages and tiles plus the display, LED, time and network settings.
+                  WiFi network names and passwords are never included. Import preserves WiFi credentials.
+                </p>
+                <div class="maintenance-actions">
+                  <button type="button" class="btn btn-accent" id="backupExport">Export configuration</button
+                  ><button type="button" class="btn" id="backupImport">Import configuration</button
+                  ><input type="file" id="backupFile" accept=".json,application/json" hidden />
+                </div>
+                <div class="note">
+                  <span class="note-k">Info</span
+                  ><span
+                    >Import accepts TouchDeck backup files only, validates every setting, and restarts the
+                    device after a successful restore.</span
+                  >
+                </div>
+              </div>
+              <div class="card">
+                <h2 class="card-title">Firmware update</h2>
+                <div class="ota-drop" id="otaDrop">
+                  <div class="upload-mark" aria-hidden="true"></div>
+                  <div class="big">Drop a firmware .bin here</div>
+                  <div class="small">
+                    or <button type="button" class="browse" id="otaBrowse">choose a file</button>
+                  </div>
+                  <input type="file" id="otaFile" accept=".bin,application/octet-stream" hidden />
+                </div>
+                <div class="ota-progress" id="otaProgress">
+                  <div class="ota-bar"><i id="otaBar"></i></div>
+                  <div class="ota-pct" id="otaText">Preparing...</div>
+                </div>
+                <div class="note warn">
+                  <span class="note-k">Caution</span
+                  ><span>Keep the device powered and this page open until the upload completes.</span>
+                </div>
+              </div>
+              <div class="card">
+                <h2 class="card-title">Firmware information</h2>
+                <dl class="facts">
+                  <div>
+                    <dt>Product</dt>
+                    <dd>TouchDeck</dd>
+                  </div>
+                  <div>
+                    <dt>Version</dt>
+                    <dd id="maintVersion">--</dd>
+                  </div>
+                  <div>
+                    <dt>Board</dt>
+                    <dd id="maintBoard">--</dd>
+                  </div>
+                  <div>
+                    <dt>Address</dt>
+                    <dd id="maintIp">--</dd>
+                  </div>
+                </dl>
+              </div>
+              <div class="card" id="sdCardBox">
+                <h2 class="card-title">microSD card</h2>
+                <p class="maintenance-copy">
+                  Holds the wallpaper gallery (also shown by the photo frame), the daily picture archive and
+                  brand icons. Without a card, pictures go to internal storage and brand icons are not
+                  available. The card uses GPIO 10-13. Pictures already stored stay where they are.
+                </p>
+                <label class="check-row standalone"
+                  ><input type="checkbox" id="sdCard" name="sdCard" /><span class="check-box"></span
+                  ><span class="check-text"><strong>Use the microSD card</strong></span></label
+                >
+                <p id="sdState" class="field-hint" role="status" style="white-space: pre-line"></p>
+                <div class="maintenance-actions">
+                  <button type="button" class="btn btn-accent" id="sdSave" disabled>Save and restart</button
+                  ><button type="button" class="btn btn-danger hidden" id="sdFormat">Format card</button>
+                </div>
+                <p class="field-hint">
+                  Format card erases the card and creates one FAT partition the deck can read. Use it when
+                  the card answers but its file system is not accepted.
+                </p>
+              </div>
+              <div class="card danger-card">
+                <h2 class="card-title">Factory reset</h2>
+                <p class="maintenance-copy">
+                  Erase every saved setting, including WiFi credentials, then restart in setup access-point
+                  mode. This cannot be undone.
+                </p>
+                <div class="confirm-action">
+                  <div class="field">
+                    <label class="field-label" for="factoryConfirm">Type RESET to continue</label
+                    ><input
+                      type="text"
+                      id="factoryConfirm"
+                      maxlength="5"
+                      autocomplete="off"
+                      spellcheck="false"
+                      placeholder="RESET"
+                    />
+                  </div>
+                  <button type="button" class="btn btn-danger btn-lg" id="factoryReset" disabled>
+                    Erase and restart
+                  </button>
+                </div>
+                <div class="note warn">
+                  <span class="note-k">Warning</span
+                  ><span
+                    >Export a configuration backup first if you may want to restore the current setup.</span
+                  >
+                </div>
+              </div>
+            </section>
+          </div>
+        </main>
+      </div>
+
+      <div class="save-bar hidden" id="saveBar">
+        <div class="save-bar-inner">
+          <div class="save-meta clean" id="saveMeta">
+            <span class="dot"></span><span class="txt">All saved</span>
+          </div>
+          <button type="button" class="btn btn-lg" id="revertBtn">Revert changes</button
+          ><button type="button" class="btn btn-accent btn-lg" id="saveBtn">
+            <span class="gl"></span><span id="saveBtnText">Save settings</span>
+          </button>
+        </div>
+      </div>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+    <script src="/portal.js?v={{v:portal.js}}"></script>
+  </body>
+</html>
