@@ -187,6 +187,34 @@ static void handleAck(JsonDocument& doc) {
   }
 }
 
+static ClaudeLive s_claude = {};
+
+const ClaudeLive& pcClaude() { return s_claude; }
+
+bool pcClaudeOnline() {
+  return s_claude.rxMs && millis() - s_claude.rxMs < PC_STALE_TIMEOUT_MS;
+}
+
+static void parseClaude(JsonObjectConst c) {
+  ClaudeLive& cl = s_claude;
+  strlcpy(cl.mood, c["mood"] | "", sizeof(cl.mood));
+  strlcpy(cl.status, c["status"] | "", sizeof(cl.status));
+  const uint32_t id = c["ev_id"] | (uint32_t)0;
+  if (id && id != cl.evId) {
+    cl.evId = id;
+    strlcpy(cl.ev, c["ev"] | "", sizeof(cl.ev));
+    strlcpy(cl.evTxt, c["ev_txt"] | "", sizeof(cl.evTxt));
+    strlcpy(cl.evSub, c["ev_sub"] | "", sizeof(cl.evSub));
+    asciiPunct(cl.evTxt);
+    asciiPunct(cl.evSub);
+    cl.evRxMs = millis();
+    cl.evSeq++;
+  }
+  asciiPunct(cl.status);
+  cl.rxMs = millis();
+  s_version++;
+}
+
 static void parsePacket(const char* json, IPAddress from, bool serial) {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, json);
@@ -210,6 +238,15 @@ static void parsePacket(const char* json, IPAddress from, bool serial) {
   for (JsonVariantConst v : doc["nonces"].as<JsonArrayConst>())
     if (n < 4) strlcpy(pc->nonces[n++], v | "", sizeof(pc->nonces[0]));
   PcMetricData& d = pc->data;
+
+  JsonObjectConst claude = doc["claude"];
+  if (!claude.isNull()) parseClaude(claude);
+  // A Claude-only packet leaves the metrics and the PC state alone.
+  if (!claude.isNull() && doc["metrics"].isNull() && doc["pcstate"].isNull()) {
+    d.lastReceived = millis();
+    d.online = true;
+    return;
+  }
 
   PcState& st = pc->state;
   JsonObjectConst ps = doc["pcstate"];

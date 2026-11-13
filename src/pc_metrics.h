@@ -103,6 +103,30 @@ const PcMetric* pcMetricFind(const PcSource* pc, uint8_t id);
 // The PC's reported state; null when it is offline.
 const PcState* pcStateOf(const PcSource* pc);
 
+// --- Claude Code (mascot widget) -------------------------------------------
+// Optional "claude" object in any packet (with or without metrics):
+//   "claude": {"mood": "coding",            // happy|coding|thinking|hyped|sleeping
+//              "status": "Cogitating...",   // what Claude Code is doing, "" = idle
+//              "ev": "input",               // last hook event: input|done|fail, "" = none
+//              "ev_txt": "esp32-c3",        // event title (session name, "Bash fallo!")
+//              "ev_sub": "esperando respuesta",
+//              "ev_id": 1411279918}         // changes with every new event
+// The companion sends the event only while it is recent (~30 s).
+struct ClaudeLive {
+  char mood[12];
+  char status[32];
+  char ev[8];
+  char evTxt[32];
+  char evSub[40];
+  uint32_t evId;     // last event id seen
+  uint32_t evSeq;    // bumps on every new event (0 = none yet)
+  uint32_t evRxMs;   // millis() when the current event arrived
+  uint32_t rxMs;     // millis() of the last packet with a "claude" object, 0 = never
+};
+const ClaudeLive& pcClaude();
+// True when a "claude" object arrived within PC_STALE_TIMEOUT_MS.
+bool pcClaudeOnline();
+
 // --- PC control -------------------------------------------------------------
 // A command goes to the PC's cmd_port as {"pc","cmd","nonce","sig"}, sig =
 // hex HMAC-SHA256(key, "pc_id|nonce|cmd") over one of the "nonces" from its
