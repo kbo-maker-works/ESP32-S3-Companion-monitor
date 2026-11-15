@@ -1,0 +1,62 @@
+// Deck UI: screen sleep and wake from presence (presenceSettings, Screen page).
+#include "deck_ui_int.h"
+
+namespace deckui {
+
+bool s_present = false;     // a PC or a print says someone is there
+uint32_t s_activeMs = 0;    // last touch, presence or wake request
+uint32_t s_presenceEval = 0;
+uint32_t s_presentMs = 0;   // last tick with presence, 0 = none since boot
+
+bool presenceNow() {
+  const PresenceSettings& p = presenceSettings;
+  if (p.pc && pcAnyOnline()) return true;
+  if (p.printing && printersJobActive()) return true;
+  return false;
+}
+
+// New config: the timer starts again.
+void presenceRestart() { s_activeMs = millis(); }
+
+void presenceWake() {
+  s_activeMs = millis();
+  wakeDisplay();
+}
+
+void presenceTick() {
+  const uint32_t now = millis();
+  if (!s_activeMs) s_activeMs = now | 1;
+  if (now - s_presenceEval < 250) return;
+  s_presenceEval = now;
+  const PresenceSettings& p = presenceSettings;
+  const bool present = presenceNow();
+  // Arrival also undoes a manual off; staying present only holds the timer.
+  if (present && !s_present) presenceWake();
+  s_present = present;
+  if (present) {
+    s_activeMs = now;
+    s_presentMs = now | 1;
+  }
+  // Night wake holds for the sleep timer after presence ends.
+  setNightWakePresence(present || (s_presentMs && p.sleepMin && now - s_presentMs < p.sleepMin * 60000UL));
+  const uint32_t touch = touchLastActivity();
+  if (touch && (int32_t)(touch - s_activeMs) > 0) s_activeMs = touch;
+  const bool sleep = p.sleepMin && getScreenState() == SCREEN_DECK && now - s_activeMs >= p.sleepMin * 60000UL;
+  if (!frameSleep(sleep)) setIdleSleep(sleep, (uint8_t)((p.dimPct * 255 + 50) / 100));
+}
+
+}  // namespace deckui
+
+using namespace deckui;
+
+void deckPresenceWake() { presenceWake(); }
+
+void deckPresenceApply() { presenceRestart(); }
+
+void deckPresenceJson(JsonObject out) {
+  const PresenceSettings& p = presenceSettings;
+  out["present"] = s_present;
+  out["asleep"] = idleSleepActive();
+  out["idle_s"] = (millis() - s_activeMs) / 1000;
+  out["sleep_min"] = p.sleepMin;
+}

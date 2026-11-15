@@ -1,0 +1,691 @@
+#!/usr/bin/env python3
+"""
+TouchDeck PC agent
+==================
+Feeds the TouchDeck (Guition JC3248W535) from this PC over WiFi:
+
+  * PC metrics for the metric tiles: CPU, RAM, NVIDIA GPU (nvidia-smi), disk,
+    network. One UDP packet a second to the deck's port 4210 (V2.1 protocol,
+    see src/pc_metrics.h in the firmware).
+  * Claude Code's state for the "Mascota Claude" widget: thinking, coding,
+    waiting for you, turn done, failed, asleep. It comes from Claude Code hooks
+    that run this same script as `touchdeck_agent.py hook` (see README.md).
+  * GitLab and Jira for the Work app (td_work.py), set up on the settings page
+    (td_portal.py, http://127.0.0.1:4213) or in ~/.touchdeck/work.json.
+    Runs on macOS and Linux too (Now playing / PC control: Windows only).
+
+Usage
+-----
+  python touchdeck_agent.py                     # deck at companion.local
+  python touchdeck_agent.py --host 192.168.1.225
+  python touchdeck_agent.py --once --verbose    # build one packet and print it
+  python touchdeck_agent.py hook                # Claude Code hook (reads stdin)
+  python touchdeck_agent.py settings            # open the settings page (127.0.0.1:4213)
+
+Only standard library + psutil. Nothing is sent anywhere but the deck.
+"""
+import argparse
+import datetime
+import hashlib
+import json
+import os
+import platform
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import threading
+import time
+import zlib
+
+DECK_PORT = 4210
+SEND_EVERY_S = 1.0
+PACKET_MAX = 1900   # the deck's buffer is 2048 (PC_PACKET_BUF_SIZE)
+RESOLVE_EVERY_S = 60.0
+
+STATE_DIR = os.path.join(os.path.expanduser("~"), ".claude", "touchdeck")
+SESSIONS_DIR = os.path.join(STATE_DIR, "sessions")
+EVENT_FILE = os.path.join(STATE_DIR, "event.json")
+USAGE_DIR = os.path.join(STATE_DIR, "usage")   # written by td_statusline.py (or the touchdeck-usage mod)
+LIMITS_FRESH_S = 3 * 24 * 3600   # plan windows: the last reading, if not ancient
+CTX_FRESH_S = 6 * 3600           # a session idle longer no longer shows its context
+
+EVENT_SHOW_S = 30      # an event (input / done / fail) is sent this long
+SESSION_IDLE_S = 600   # a session quiet this long no longer counts as working
+SLEEP_AFTER_S = 900    # no Claude Code activity this long: the mascot sleeps
+
+# Firmware field sizes (bytes incl. the terminator): see ClaudeLive / PcMetric.
+MAX_STATUS, MAX_EV_TXT, MAX_EV_SUB = 31, 31, 39
+MAX_ACCT, MAX_ORG = 39, 31  # ClaudeUsage::acct / org
+
+
+def clip(text, max_bytes):
+    """Cuts UTF-8 text to max_bytes without splitting a character."""
+    b = (text or "").encode("utf-8")[:max_bytes]
+    return b.decode("utf-8", "ignore")
+
+
+def write_json_atomic(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, path)
+
+
+def read_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Claude Code hook: record what just happened, quickly, and never fail the hook
+# ---------------------------------------------------------------------------
+def tool_summary(name, tool_input):
+    """'Bash: pio run', 'Edit: main.cpp' ... short enough for the deck."""
+    ti = tool_input if isinstance(tool_input, dict) else {}
+    detail = ""
+    if name in ("Bash", "PowerShell"):
+        detail = (ti.get("description") or ti.get("command") or "").splitlines()[0:1]
+        detail = detail[0] if detail else ""
+    elif name in ("Edit", "Write", "Read", "NotebookEdit", "MultiEdit"):
+        detail = os.path.basename(ti.get("file_path") or ti.get("notebook_path") or "")
+    elif name in ("Grep", "Glob"):
+        detail = ti.get("pattern") or ""
+    elif name in ("WebFetch", "WebSearch"):
+        detail = ti.get("url") or ti.get("query") or ""
+    elif name in ("Agent", "Task"):
+        detail = ti.get("description") or ""
+    name = name.replace("mcp__", "").split("__")[-1]
+    return clip("%s: %s" % (name, detail) if detail else name, MAX_STATUS)
+
+
+def tool_failed(resp):
+    """Best effort: tool responses differ per tool."""
+    if not isinstance(resp, dict):
+        return False
+    if resp.get("is_error") or resp.get("interrupted"):
+        return True
+    for key in ("exitCode", "exit_code", "returnCode", "return_code"):
+        code = resp.get(key)
+        if isinstance(code, int) and code != 0:
+            return True
+    return False
+
+
+def run_hook():
+    try:
+        payload = json.load(sys.stdin)
+    except ValueError:
+        return
+    event = payload.get("hook_event_name") or ""
+    sid = clip(payload.get("session_id") or "default", 64)
+    project = os.path.basename((payload.get("cwd") or "").rstrip("\\/")) or "Claude Code"
+    path = os.path.join(SESSIONS_DIR, "%s.json" % hashlib.sha1(sid.encode()).hexdigest()[:16])
+    now = time.time()
+
+    if event == "SessionEnd":
+        # Its state and its context (td_statusline.py names it the same way).
+        for p in (path, os.path.join(USAGE_DIR, os.path.basename(path))):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        return
+
+    s = read_json(path) or {}
+    s.update(project=project, t=now)
+    if "start" not in s:
+        s["start"] = now
+    ev = None
+
+    def set_state(state, detail=""):
+        # The session list on the deck: working / input / done / idle, since when.
+        if s.get("state") != state:
+            s["since"] = now
+        s.update(state=state, detail=detail)
+
+    if event == "SessionStart":
+        if payload.get("source") == "compact":  # compacted in the middle of a turn
+            s.update(mood="thinking", status="Thinking...", working=True)
+            set_state("working", "Compacting")
+        else:
+            s.update(mood="happy", status="", working=False)
+            set_state("idle")
+    elif event == "UserPromptSubmit":
+        s.update(mood="thinking", status="Thinking...", working=True)
+        set_state("working", "Thinking...")
+    elif event == "PreToolUse":
+        status = tool_summary(payload.get("tool_name") or "", payload.get("tool_input"))
+        s.update(mood="coding", status=status, working=True)
+        set_state("working", status)
+    elif event in ("PostToolUse", "PostToolUseFailure"):
+        s.update(mood="thinking", working=True)
+        set_state("working", s.get("detail") or "Thinking...")
+        if event == "PostToolUseFailure" or tool_failed(payload.get("tool_response")):
+            name = (payload.get("tool_name") or "Tool").replace("mcp__", "").split("__")[-1]
+            ev = ("fail", "%s failed!" % name, project)
+    elif event == "Notification":
+        msg = (payload.get("message") or "").lower()
+        kind = payload.get("notification_type") or ""
+        permission = kind == "permission_prompt" or "permission" in msg or "permiso" in msg
+        idle = kind == "idle_prompt" or "waiting for your input" in msg
+        if idle and s.get("state") in ("done", "idle"):
+            pass  # a finished turn reminding you: it stays done
+        else:
+            sub = "needs permission" if permission else "waiting for you"
+            s.update(working=False)
+            set_state("input", sub.capitalize())
+            ev = ("input", project, sub)
+    elif event in ("Stop", "SubagentStop"):
+        if event == "Stop":
+            s.update(mood="happy", status="", working=False)
+            set_state("done")
+            ev = ("done", project, "turn done")
+    write_json_atomic(path, s)
+    if ev:
+        write_json_atomic(EVENT_FILE, {
+            "ev": ev[0], "ev_txt": clip(ev[1], MAX_EV_TXT), "ev_sub": clip(ev[2], MAX_EV_SUB),
+            "ev_id": zlib.crc32(("%s|%s|%f" % (sid, ev[0], now)).encode()) or 1, "t": now,
+        })
+
+
+# ---------------------------------------------------------------------------
+# Claude state for the mascot, merged from every session's file
+# ---------------------------------------------------------------------------
+def claude_state(now):
+    sessions = []
+    try:
+        names = os.listdir(SESSIONS_DIR)
+    except OSError:
+        names = []
+    for name in names:
+        if name.endswith(".json"):
+            s = read_json(os.path.join(SESSIONS_DIR, name))
+            if isinstance(s, dict) and now - float(s.get("t", 0)) < 24 * 3600:
+                sessions.append(s)
+
+    latest = max(sessions, key=lambda s: s.get("t", 0)) if sessions else None
+    working = [s for s in sessions if s.get("working") and now - s.get("t", 0) < SESSION_IDLE_S]
+    if not latest or now - latest.get("t", 0) > SLEEP_AFTER_S:
+        mood, status = "sleeping", ""
+    elif len(working) >= 2:
+        mood, status = "hyped", "%d sessions at once" % len(working)
+    elif working:
+        w = max(working, key=lambda s: s.get("t", 0))
+        mood, status = w.get("mood") or "thinking", w.get("status") or ""
+    else:
+        mood, status = "happy", ""
+    out = {"mood": mood, "status": clip(status, MAX_STATUS)}
+
+    ev = read_json(EVENT_FILE)
+    if isinstance(ev, dict) and now - float(ev.get("t", 0)) < EVENT_SHOW_S:
+        out.update({k: ev.get(k) for k in ("ev", "ev_txt", "ev_sub", "ev_id")})
+    out.update(usage_state(now))
+    out["ss"] = session_list(sessions, now)
+    return out
+
+
+# The deck's session list (AI app): [name, state, seconds in that state, detail]
+# with state w (working), i (waiting for you), d (turn done), z (idle). Waiting
+# ones first, then working, done, idle; newest first inside each group.
+SESSION_ORDER = {"i": 0, "w": 1, "d": 2, "z": 3}
+SESSION_LIST_MAX = 6
+SESSION_SHOW_S = 12 * 3600   # older sessions (closed without SessionEnd) drop off
+STALE_WORKING_S = 1800       # "working" with no hook for this long: it is not
+
+
+def session_list(sessions, now):
+    rows = []
+    for s in sessions:
+        t = float(s.get("t", 0))
+        if now - t > SESSION_SHOW_S:
+            continue
+        state = s.get("state") or ("working" if s.get("working") else "done")
+        code = {"working": "w", "input": "i", "done": "d"}.get(state, "z")
+        if code == "w" and now - t > STALE_WORKING_S:
+            code = "z"
+        detail = s.get("detail") or ""
+        rows.append([s.get("project") or "Claude Code", code, int(now - float(s.get("since") or t)),
+                     detail if code in ("w", "i") else "", float(s.get("start") or t), t])
+    # Same project twice: number them by start time ("desktop-companion 2").
+    seen = {}
+    for r in sorted(rows, key=lambda r: r[4]):
+        seen[r[0]] = seen.get(r[0], 0) + 1
+        if seen[r[0]] > 1:
+            r[0] = "%s %d" % (r[0], seen[r[0]])
+    rows.sort(key=lambda r: (SESSION_ORDER[r[1]], -r[5]))
+    return [[clip(r[0], 23), r[1], max(0, r[2]), clip(r[3], 31)] for r in rows[:SESSION_LIST_MAX]]
+
+
+# ---------------------------------------------------------------------------
+# Plan usage and context, from the touchdeck-usage mod's files (one per session)
+# ---------------------------------------------------------------------------
+def iso_epoch(text):
+    """ISO text or Unix seconds (td_statusline.py) -> Unix seconds, 0 = unknown."""
+    if not text:
+        return 0
+    if isinstance(text, (int, float)):
+        return int(text)
+    try:
+        return int(datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return 0
+
+
+def pretty_model(model):
+    """'claude-opus-5-5[1m]' -> 'Opus 5.5 1M'; anything else as it came."""
+    m = re.match(r"(?:claude-)?([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(\[1m\])?$", model or "")
+    if not m:
+        return clip(model or "", 19)
+    name = m.group(1).capitalize() + " " + m.group(2) + ("." + m.group(3) if m.group(3) else "")
+    return clip(name + (" 1M" if m.group(4) else ""), 19)
+
+
+def usage_state(now):
+    out = {}
+    limits_done = False
+    # td_statusline.py: the windows per account, and which one is logged in.
+    store = read_json(os.path.join(USAGE_DIR, "limits.json"))
+    if isinstance(store, dict) and isinstance(store.get("accounts"), dict):
+        limits_done = True
+        entry = store["accounts"].get(store.get("current")) or {}
+        out["acct"] = clip(entry.get("email") or "", MAX_ACCT)
+        out["org"] = clip(entry.get("org") or "", MAX_ORG)
+        limits = entry.get("limits") or {}
+        for kind, key in (("five_hour", "q5"), ("seven_day", "q7")):
+            w = limits.get(kind)
+            if isinstance(w, dict) and w.get("pct") is not None:
+                out[key] = round(float(w["pct"]), 1)
+                out[key + "r"] = iso_epoch(w.get("resets_at"))
+            else:
+                out[key] = -1  # this account has none yet: not the previous account's
+    files = []
+    try:
+        for name in os.listdir(USAGE_DIR):
+            if name.endswith(".json") and name not in ("limits.json", "account.json"):
+                path = os.path.join(USAGE_DIR, name)
+                files.append((os.path.getmtime(path), path))
+    except OSError:
+        return {}
+    files.sort(reverse=True)
+    ctx_done = False
+    for mtime, path in files:
+        if limits_done and ctx_done:
+            break
+        u = read_json(path)
+        if not isinstance(u, dict):
+            continue
+        limits = u.get("limits") or {}
+        # The windows are the account's: the newest file that has them.
+        if not limits_done and limits and now - mtime < LIMITS_FRESH_S:
+            limits_done = True
+            for kind, key in (("five_hour", "q5"), ("seven_day", "q7")):
+                w = limits.get(kind)
+                if isinstance(w, dict) and w.get("pct") is not None:
+                    out[key] = round(float(w["pct"]), 1)
+                    out[key + "r"] = iso_epoch(w.get("resets_at"))
+        # The context is a session's: the newest one still open.
+        if not ctx_done and not u.get("ended") and now - mtime < CTX_FRESH_S and u.get("ctx_pct") is not None:
+            ctx_done = True
+            out.update(ctx=round(float(u["ctx_pct"]), 1), ctx_tok=int(u.get("ctx_tokens") or 0),
+                       ctx_win=int(u.get("ctx_window") or 0), proj=clip(u.get("project") or "", 23),
+                       model=pretty_model(u.get("model")))
+    if not ctx_done:
+        out["ctx"] = -1
+    return out
+
+
+# ---------------------------------------------------------------------------
+# PC metrics
+# ---------------------------------------------------------------------------
+class Gpu:
+    """NVIDIA GPU through one long-running `nvidia-smi -l 1` (no process per sample)."""
+    FIELDS = "utilization.gpu,temperature.gpu,memory.used,memory.total,power.draw"
+
+    def __init__(self):
+        self.values = None
+        exe = shutil.which("nvidia-smi")
+        if not exe:
+            return
+        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        try:
+            self.proc = subprocess.Popen(
+                [exe, "--query-gpu=" + self.FIELDS, "--format=csv,noheader,nounits", "-l", "1"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, creationflags=flags)
+        except OSError:
+            return
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self):
+        for line in self.proc.stdout:
+            parts = [p.strip() for p in line.split(",")]
+            try:
+                util, temp, used, total, power = (float(p) for p in parts[:5])
+            except ValueError:
+                continue  # first GPU only; "[N/A]" fields are skipped
+            self.values = (util, temp, 100.0 * used / total if total else 0.0, power)
+
+
+class Metrics:
+    BATTERY_EVERY_S = 30  # it moves slowly; reading it costs a few ms on macOS
+
+    def __init__(self):
+        import psutil  # noqa: imported here so `hook` runs without it
+        self.ps = psutil
+        self.ps.cpu_percent(interval=None)  # first call primes the counter
+        self.net = self.ps.net_io_counters()
+        self.net_t = time.monotonic()
+        self.gpu = Gpu()
+        self.disk_path = os.environ.get("SystemDrive", "C:") + "\\" if os.name == "nt" else "/"
+        # macOS: "/" is the sealed system volume (a few GB); the files live on Data.
+        if sys.platform == "darwin" and os.path.isdir("/System/Volumes/Data"):
+            self.disk_path = "/System/Volumes/Data"
+        self.batt, self.batt_t = None, -self.BATTERY_EVERY_S
+
+    def _disk(self):
+        d = self.ps.disk_usage(self.disk_path)
+        if sys.platform == "darwin":  # as the Mac shows it: the APFS container's free space against its size
+            return 100.0 * (d.total - d.free) / d.total if d.total else 0.0
+        return d.percent
+
+    def _battery(self):
+        """The battery's charge (%), None without one."""
+        if time.monotonic() - self.batt_t >= self.BATTERY_EVERY_S:
+            self.batt_t = time.monotonic()
+            try:
+                b = self.ps.sensors_battery()
+                self.batt = float(b.percent) if b else None
+            except (AttributeError, OSError, RuntimeError):
+                self.batt = None
+        return self.batt
+
+    def read(self):
+        ps = self.ps
+        mem = ps.virtual_memory()
+        net, t = ps.net_io_counters(), time.monotonic()
+        dt = max(t - self.net_t, 0.001)
+        down = (net.bytes_recv - self.net.bytes_recv) / 1024.0 / dt
+        up = (net.bytes_sent - self.net.bytes_sent) / 1024.0 / dt
+        self.net, self.net_t = net, t
+        # Stable ids: deck tiles bind to them. KB/s go x10 (the firmware divides by 10).
+        m = [
+            (1, "CPU", "%", ps.cpu_percent(interval=None)),
+            (2, "RAM", "%", mem.percent),
+            (3, "RAM USED", "GB", mem.used / 1024 ** 3),
+            (8, "DISK", "%", self._disk()),
+            (9, "DOWN", "KB/s", round(down * 10)),
+            (10, "UP", "KB/s", round(up * 10)),
+        ]
+        if self.gpu.values:
+            util, temp, vram, power = self.gpu.values
+            m += [(4, "GPU", "%", util), (5, "GPUT", "C", temp), (6, "VRAM", "%", vram), (7, "GPUW", "W", power)]
+        batt = self._battery()
+        if batt is not None:  # laptops: the deck's "PC stats" widget rings it
+            m.append((11, "BATT", "%", batt))
+        m.sort()
+        return [{"id": i, "name": n, "unit": u, "value": round(float(v), 1)} for i, n, u, v in m]
+
+
+# ---------------------------------------------------------------------------
+# Sending
+# ---------------------------------------------------------------------------
+def pc_identity():
+    host = platform.node() or "PC"
+    pc_id = hashlib.sha1(host.encode()).hexdigest()[:12]
+    # macOS says "Name.local": cut to 23 that left "Name." on the deck. The id keeps the full name.
+    name = host[:-6] if host.lower().endswith(".local") and len(host) > 6 else host
+    return pc_id, clip(name, 23)
+
+
+class Target:
+    """The deck's address: resolved by name now and then; broadcast if that fails."""
+
+    def __init__(self, host):
+        self.host, self.addr, self.when = host, None, 0.0
+
+    def get(self):
+        if time.monotonic() - self.when > RESOLVE_EVERY_S or not self.addr:
+            self.when = time.monotonic()
+            try:
+                self.addr = socket.gethostbyname(self.host)
+            except OSError:
+                self.addr = None
+        return self.addr or "255.255.255.255"
+
+
+class PcSide:
+    """Now playing and cover server (Windows, macOS), volume (Windows), and signed
+    commands from the deck (td_pc.py, any OS once paired); None parts if unavailable.
+    handlers: extra commands by prefix, e.g. {"open:": worker.open_link}.
+    awake: td_awake.Awake, whose state goes in pcstate for the deck's tile.
+    batteries: td_batteries.Batteries, this PC's and its accessories' ("batt")."""
+
+    def __init__(self, pc_id, handlers=None, awake=None, batteries=None):
+        self.media = self.volume = self.commands = self.keyring = None
+        self.awake = awake
+        self.batteries = batteries
+        try:
+            import td_pc
+        except ImportError as e:
+            print("media/control off: %s" % e, flush=True)
+            return
+        self.td = td_pc
+        self.keyring = td_pc.Keyring()
+        if sys.platform == "win32":  # Windows media controls and audio (SMTC, pycaw)
+            try:
+                self.volume = td_pc.Volume()
+            except Exception as e:
+                print("volume off: %s" % e, flush=True)
+            try:
+                self.media = td_pc.Media()
+                td_pc.start_art_server(self.media)
+            except Exception as e:
+                print("media off: %s" % e, flush=True)
+                self.media = None
+        elif sys.platform == "darwin":  # Now playing through Apple's python3 (td_media_mac.py)
+            try:
+                import td_media_mac
+                py = td_media_mac.apple_python()
+                if py:
+                    self.media = td_media_mac.MacMedia(py)
+                    td_pc.start_art_server(self.media)
+                else:
+                    print("media off: needs Apple's Command Line Tools (xcode-select --install)", flush=True)
+            except Exception as e:
+                print("media off: %s" % e, flush=True)
+                self.media = None
+        else:
+            print("media/volume: Windows and macOS only for now", flush=True)
+        try:
+            self.commands = td_pc.Commands(pc_id, self.media, self.volume, self.keyring, handlers)
+        except OSError as e:
+            print("commands off: %s" % e, flush=True)
+
+    def fill(self, pkt):
+        state = {}
+        if self.volume:
+            vol, mute = self.volume.read()
+            if vol is not None:
+                state.update(vol=vol, mute=mute)
+        if self.awake:
+            state["awake"] = self.awake.on
+        batt = self.batteries.get() if self.batteries else None
+        if batt:
+            state["batt"] = batt
+        media = self.media.snapshot() if self.media else None
+        if media:
+            state["media"] = media
+            pkt["art_port"] = self.td.ART_PORT
+        if state:
+            pkt["pcstate"] = state
+        # Commands only once paired: the deck signs them with the shared key.
+        if self.commands and self.keyring.get():
+            pkt["cmd_port"] = self.td.CMD_PORT
+            pkt["nonces"] = self.commands.issue()
+
+
+def start_work(target, pc_id, pc_name, verbose):
+    """GitLab and Jira for the Work app (td_work.py, set up in ~/.touchdeck/work.json
+    or on the settings page). Runs with no sources too: the page can add them."""
+    try:
+        import td_work
+        worker = td_work.Worker(td_work.load_config() or {}, target.get, pc_id, pc_name, verbose)
+        worker.start()
+        print("work: %s" % (", ".join(worker.sources) or "no sources yet"), flush=True)
+        return worker
+    except Exception as e:  # a bad work.json must not stop the metrics
+        print("work off: %s" % e, flush=True)
+        return None
+
+
+def start_awake():
+    """Keep awake (td_awake.py): the deck's "awake_toggle" and the settings page."""
+    try:
+        import td_awake
+        awake = td_awake.Awake()
+        if not awake.os:
+            print("awake: Windows and macOS only for now", flush=True)
+            return None
+        if awake.on:
+            print("awake: on", flush=True)
+        return awake
+    except Exception as e:
+        print("awake off: %s" % e, flush=True)
+        return None
+
+
+def start_batteries(pc_name):
+    """This PC's battery and its accessories' for the deck (td_batteries.py)."""
+    try:
+        import td_batteries
+        return td_batteries.Batteries(pc_name)
+    except Exception as e:
+        print("batteries off: %s" % e, flush=True)
+        return None
+
+
+def start_portal(port, worker, host, target, pc_name, awake=None):
+    """The settings page on 127.0.0.1 (td_portal.py)."""
+    if not port:
+        return
+    try:
+        import td_portal
+        portal = td_portal.Portal(worker, host, target.get, pc_name, port, awake=awake)
+        if portal.serve():
+            print("settings: %s" % portal.url, flush=True)
+        else:
+            print("settings off: port %d is taken (another agent running?)" % port, flush=True)
+    except Exception as e:
+        print("settings off: %s" % e, flush=True)
+
+
+def build_packet(metrics, pc_id, pc_name, pc=None):
+    now = time.time()
+    pkt = {
+        "pc_id": pc_id,
+        "pc_name": pc_name,
+        "timestamp": time.strftime("%H:%M"),
+        "status": 1,
+        "metrics": metrics.read(),
+    }
+    # Only a machine whose Claude Code runs the hooks (or the usage mod) speaks
+    # for Claude: another PC's empty state would overwrite it on the deck.
+    if os.path.isdir(SESSIONS_DIR) or os.path.isdir(USAGE_DIR):
+        pkt["claude"] = claude_state(now)
+    if pc:
+        pc.fill(pkt)
+    # The deck drops packets over 2048 bytes: shed the session list's details,
+    # then its rows, before that happens.
+    ss = (pkt.get("claude") or {}).get("ss") or []
+    while ss and len(json.dumps(pkt, separators=(",", ":")).encode()) > PACKET_MAX:
+        if any(r[3] for r in ss):
+            for r in ss:
+                r[3] = ""
+        else:
+            ss.pop()
+    return pkt
+
+
+def main():
+    ap = argparse.ArgumentParser(description="TouchDeck PC agent")
+    ap.add_argument("mode", nargs="?", default="run", choices=["run", "hook", "pair", "settings"],
+                    help="run (default), hook (Claude Code), pair (get the key for PC control), "
+                         "settings (open the settings page of the running agent)")
+    ap.add_argument("--host", default=os.environ.get("TOUCHDECK_HOST", "companion.local"),
+                    help="deck name or IP (default companion.local, env TOUCHDECK_HOST)")
+    ap.add_argument("--once", action="store_true", help="build and print one packet, send nothing")
+    ap.add_argument("--portal-port", type=int, default=int(os.environ.get("TOUCHDECK_PORTAL_PORT", 4213)),
+                    help="settings page on 127.0.0.1 (default 4213, 0 = off)")
+    ap.add_argument("--verbose", action="store_true")
+    args = ap.parse_args()
+
+    if args.mode == "hook":
+        try:
+            run_hook()
+        except Exception:  # a hook must never get in Claude Code's way
+            pass
+        return
+
+    if args.mode == "settings":
+        import webbrowser
+        url = "http://127.0.0.1:%d/" % args.portal_port
+        import td_portal
+        if not td_portal.port_in_use(args.portal_port):
+            raise SystemExit("the agent is not running (start it first: python touchdeck_agent.py)")
+        print(url)
+        webbrowser.open(url)
+        return
+
+    pc_id, pc_name = pc_identity()
+    if args.mode == "pair":
+        import td_pc
+        td_pc.pair(Target(args.host).get(), pc_id)
+        return
+
+    metrics = Metrics()
+    if args.once:
+        pc = PcSide(pc_id, batteries=start_batteries(pc_name))
+        time.sleep(2.5)  # the media thread's first poll
+        print(json.dumps(build_packet(metrics, pc_id, pc_name, pc), indent=2, ensure_ascii=False))
+        return
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    target = Target(args.host)
+    print("TouchDeck agent: %s -> %s:%d" % (pc_name, args.host, DECK_PORT), flush=True)
+    worker = start_work(target, pc_id, pc_name, args.verbose)
+    awake = start_awake()
+    start_portal(args.portal_port, worker, args.host, target, pc_name, awake)
+    # Taps on the deck's Work rows open their MR / ticket / pipeline here; a
+    # Keep awake tile toggles it.
+    handlers = {}
+    if worker:
+        handlers["open:"] = worker.open_link
+    if awake:
+        handlers["awake_toggle"] = awake.command
+    pc = PcSide(pc_id, handlers or None, awake, start_batteries(pc_name))
+    failing = None  # the last send error, logged once (the service's log stays small)
+    while True:
+        t0 = time.monotonic()
+        try:
+            data = json.dumps(build_packet(metrics, pc_id, pc_name, pc), separators=(",", ":")).encode()
+            addr = target.get()
+            sock.sendto(data, (addr, DECK_PORT))
+            if failing:
+                print("%s send OK again -> %s" % (time.strftime("%H:%M:%S"), addr), flush=True)
+                failing = None
+            if args.verbose:
+                print("%s %d B -> %s" % (time.strftime("%H:%M:%S"), len(data), addr), flush=True)
+        except OSError as e:
+            if str(e) != failing:
+                print("%s send failed: %s (logged once until it changes)" % (time.strftime("%H:%M:%S"), e), flush=True)
+                failing = str(e)
+        time.sleep(max(0.0, SEND_EVERY_S - (time.monotonic() - t0)))
+
+
+if __name__ == "__main__":
+    main()

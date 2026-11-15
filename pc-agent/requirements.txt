@@ -1,0 +1,16 @@
+# touchdeck_agent.py
+psutil>=5.9
+# td_pc.py (Now playing, cover, volume, commands) - Windows; macOS needs nothing extra (td_media_mac.py)
+pillow>=10; sys_platform == "win32"
+pycaw>=20240316; sys_platform == "win32"
+winrt-runtime>=2.0; sys_platform == "win32"
+winrt-Windows.Foundation>=2.0; sys_platform == "win32"
+winrt-Windows.Foundation.Collections>=2.0; sys_platform == "win32"
+winrt-Windows.Media.Control>=2.0; sys_platform == "win32"
+winrt-Windows.Storage.Streams>=2.0; sys_platform == "win32"
+# td_work.py (Work app: GitLab, Jira) needs nothing beyond the standard library
+# td_portal.py (settings page on 127.0.0.1:4213)
+fastapi>=0.110
+uvicorn>=0.29
+# companion_agent.py (old ESP32-C3 agent)
+pyserial>=3.5

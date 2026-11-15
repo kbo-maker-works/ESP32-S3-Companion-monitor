@@ -1,0 +1,188 @@
+#include "display_ui.h"
+#include "config.h"
+#include "settings.h"
+#include "deck_ui.h"
+#include "deck_touch.h"
+#include <time.h>
+
+static ScreenState s_screen = SCREEN_SPLASH;
+
+ScreenState getScreenState() { return s_screen; }
+void setScreenState(ScreenState state) { s_screen = state; }
+void displayTick() { deckTick(); }
+
+// ---------------------------------------------------------------------------
+//  Backlight
+// ---------------------------------------------------------------------------
+static uint8_t lastAppliedBrightness = 0;
+static bool g_night_active = false;
+static bool g_led_night = false;
+static bool g_time_valid = false;
+static bool g_backlight_refresh = true;
+static bool g_manual_display_off = false;
+static bool g_manual_night = false;
+static bool g_idle_sleep = false;
+static uint8_t g_idle_level = 0;  // backlight cap while idle-asleep, 0 = off
+static bool g_night_window = false;
+static bool g_wake_presence = false;
+static uint32_t g_last_backlight_check_ms = 0;
+
+// Idle sleep fades; every other change is instant.
+static int16_t g_target = -1;
+static uint16_t g_next_fade_ms = 0;
+static uint8_t g_fade_from = 0;
+static uint32_t g_fade_start = 0;
+static uint16_t g_fade_ms = 0;
+constexpr uint16_t SLEEP_FADE_MS = 1500;
+constexpr uint16_t WAKE_FADE_MS = 250;
+
+// A touch on a 0% screen lights it at 10% until a minute after the last touch.
+static bool g_peek = false;
+static uint32_t g_peek_ms = 0;
+constexpr uint8_t PEEK_LEVEL = 26;
+constexpr uint32_t PEEK_MS = 60000;
+
+void setBacklight(uint8_t level) {
+  analogWrite(BACKLIGHT_PIN, level);
+  lastAppliedBrightness = level;
+}
+
+uint8_t currentBacklightLevel() { return lastAppliedBrightness; }
+bool nightBrightnessActive() { return g_night_active; }
+bool ledNightActive() { return g_led_night; }
+bool backlightTimeValid() { return g_time_valid; }
+bool manualDisplayOff() { return g_manual_display_off; }
+bool manualNightActive() { return g_manual_night; }
+bool displaySleepingForTouch() { return g_manual_display_off || g_idle_sleep || g_target == 0; }
+bool idleSleepActive() { return g_idle_sleep; }
+bool nightWakeActive() {
+  return presenceSettings.nightWake && g_wake_presence && g_night_window && !g_manual_night;
+}
+bool nightScreenOff() {
+  return g_night_active && !backlightSettings.nightBrightness &&
+         !(nightWakeActive() && presenceSettings.nightWakeLevel);
+}
+
+void setNightWakePresence(bool present) {
+  if (present == g_wake_presence) return;
+  g_wake_presence = present;
+  if (presenceSettings.nightWake && g_night_window) g_next_fade_ms = present ? WAKE_FADE_MS : SLEEP_FADE_MS;
+  refreshBacklightControl();
+}
+
+void setManualNight(bool on) {
+  g_manual_night = on;
+  refreshBacklightControl();
+}
+
+void setManualDisplayOff(bool off) {
+  g_manual_display_off = off;
+  refreshBacklightControl();
+}
+
+void setIdleSleep(bool sleep, uint8_t level) {
+  if (sleep == g_idle_sleep && (!sleep || level == g_idle_level)) return;
+  if (sleep != g_idle_sleep) g_next_fade_ms = sleep ? SLEEP_FADE_MS : WAKE_FADE_MS;
+  g_idle_sleep = sleep;
+  g_idle_level = level;
+  refreshBacklightControl();
+}
+
+void wakeDisplay() {
+  g_manual_display_off = false;
+  setIdleSleep(false, 0);
+  refreshBacklightControl();
+}
+
+void wakeDisplayFromTouch() {
+  g_peek = true;
+  g_peek_ms = millis();
+  wakeDisplay();
+}
+
+void refreshBacklightControl() { g_backlight_refresh = true; }
+
+// start == end is no interval; start > end wraps past midnight.
+static bool inNightWindow(uint16_t minute, uint16_t start, uint16_t end) {
+  if (start < end) return minute >= start && minute < end;
+  if (start > end) return minute >= start || minute < end;
+  return false;
+}
+
+void updateBacklightControl() {
+  const uint32_t nowMs = millis();
+  if (g_fade_ms) {
+    const uint32_t t = nowMs - g_fade_start;
+    if (t >= g_fade_ms) {
+      g_fade_ms = 0;
+      setBacklight((uint8_t)g_target);
+    } else {
+      const uint8_t level = g_fade_from + ((int)g_target - g_fade_from) * (int)t / g_fade_ms;
+      if (level != lastAppliedBrightness) setBacklight(level);
+    }
+  }
+  if (!g_backlight_refresh && nowMs - g_last_backlight_check_ms < 1000) return;
+  g_backlight_refresh = false;
+  g_last_backlight_check_ms = nowMs;
+
+  const time_t epoch = time(nullptr);
+  g_time_valid = epoch >= 1609459200;  // 2021-01-01, safely past an unsynced epoch
+  bool nightWindow = false;
+  g_led_night = false;
+  if (g_time_valid) {
+    struct tm localTime;
+    localtime_r(&epoch, &localTime);
+    const uint16_t minute = localTime.tm_hour * 60 + localTime.tm_min;
+    if (backlightSettings.nightEnabled)
+      nightWindow = inNightWindow(minute, backlightSettings.nightStartMinute,
+                                  backlightSettings.nightEndMinute);
+    g_led_night = ledSettings.nightEnabled &&
+                  inNightWindow(minute, ledSettings.nightStartMinute, ledSettings.nightEndMinute);
+  }
+  g_night_window = nightWindow;
+  g_night_active = nightWindow || g_manual_night;
+
+  uint8_t target = g_night_active ? backlightSettings.nightBrightness : brightness;
+  if (nightWakeActive()) target = max(target, presenceSettings.nightWakeLevel);
+  if (g_peek) {
+    uint32_t last = deck::touchLastActivity();
+    if ((int32_t)(last - g_peek_ms) < 0) last = g_peek_ms;
+    if (nowMs - last >= PEEK_MS) {
+      g_peek = false;
+      g_next_fade_ms = SLEEP_FADE_MS;
+    } else if (!target) {
+      target = PEEK_LEVEL;
+    }
+  }
+  if (g_idle_sleep) target = min(target, g_idle_level);
+  if (g_manual_display_off) target = 0;
+  const uint16_t fade = g_next_fade_ms;
+  g_next_fade_ms = 0;
+  if (target == g_target) return;
+  g_target = target;
+  if (fade) {
+    g_fade_from = lastAppliedBrightness;
+    g_fade_start = nowMs;
+    g_fade_ms = fade;
+  } else {
+    g_fade_ms = 0;
+    setBacklight(target);
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  Init
+// ---------------------------------------------------------------------------
+void initDisplay() {
+  // Panel bring-up wants the rails settled after power-on.
+  delay(500);
+  if (!deckBegin(dispSettings.rotation)) Serial.println("Display: deck pipeline init FAILED");
+  displayTick();  // the splash is on the panel before the light comes on
+  pinMode(BACKLIGHT_PIN, OUTPUT);
+  setBacklight(brightness);
+}
+
+void applyDisplaySettings() {
+  deckApplyTheme(dispSettings.theme);
+  deckApplyRotation(dispSettings.rotation);
+}
