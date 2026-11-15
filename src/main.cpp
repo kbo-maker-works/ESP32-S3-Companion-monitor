@@ -6,20 +6,20 @@
 #include <esp_task_wdt.h>
 #include <esp_heap_caps.h>
 #include "config.h"
-#include "display_ui.h"
+#include "ui/display_ui.h"
 #include "settings.h"
-#include "wifi_manager.h"
-#include "web_server.h"
-#include "pc_metrics.h"
-#include "led.h"
-#include "haptic.h"
-#include "audio.h"
-#include "crash_log.h"
-#include "deck_daily.h"
-#include "deck_sd.h"
-#include "companion_settings.h"
-#include "flight_service.h"
-#include "weather_service.h"
+#include "network/wifi_manager.h"
+#include "network/web_server.h"
+#include "services/pc_metrics.h"
+#include "hardware/led.h"
+#include "hardware/haptic.h"
+#include "hardware/audio.h"
+#include "core/crash_log.h"
+#include "services/deck_daily.h"
+#include "hardware/deck_sd.h"
+#include "core/companion_settings.h"
+#include "services/flight_service.h"
+#include "services/weather_service.h"
 
 // Loop-task watchdog: an indefinite block in loop() panics after
 // WDT_TIMEOUT_S with a backtrace and reboots (/api/status then reports

@@ -1,4 +1,4 @@
-"""Embed the web portal (web/) into src/web_assets.h as gzipped PROGMEM arrays.
+"""Embed the web portal (web/) into src/network/web_assets.h as gzipped PROGMEM arrays.
 
 Runs before every build (extra_scripts = pre:...), or standalone:
   python scripts/web_embed.py
@@ -52,7 +52,7 @@ def build(root):
 
 def main(root):
     text = build(root)
-    path = os.path.join(root, "src", "web_assets.h")
+    path = os.path.join(root, "src", "network", "web_assets.h")
     try:
         with open(path, encoding="utf-8") as f:
             if f.read() == text:
@@ -61,7 +61,7 @@ def main(root):
         pass
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
-    print("web_embed: wrote src/web_assets.h")
+    print("web_embed: wrote src/network/web_assets.h")
 
 
 try:

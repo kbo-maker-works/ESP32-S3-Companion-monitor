@@ -11,7 +11,7 @@ and saved as baseline JPEG with 8-hex names, the format the deck expects.
 
 Copy OUT's folders to the microSD card, or use "upload": l -> /companion/fondos,
 p -> /companion/fondos-vertical, dl -> /companion/diarias, dp ->
-/companion/diarias-vertical (layout in src/deck_sd.cpp). Needs Pillow.
+/companion/diarias-vertical (layout in src/hardware/deck_sd.cpp). Needs Pillow.
 """
 import argparse
 import io

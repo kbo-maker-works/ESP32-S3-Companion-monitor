@@ -44,6 +44,7 @@
 .dk-ibtn{display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 4px;border:1px solid transparent;border-radius:var(--r-md);background:none;color:var(--ink);cursor:pointer;min-width:0}
 .dk-ibtn:hover{background:var(--card-2)}.dk-ibtn.on{border-color:var(--accent);background:var(--accent-soft)}
 .dk-ibtn i{font:28px dkmdi, dkcbi;font-style:normal;line-height:1}.dk-ibtn small{font:10px var(--mono);color:var(--dim);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dk-pk{display:grid;gap:8px;margin-top:10px}.dk-pkrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r-md)}.dk-pkinfo{flex:1;min-width:200px}.dk-pkinfo code{font:12px var(--mono);color:var(--dim)}.dk-pkinfo small{display:block;color:var(--dim);font-size:12px;margin-top:2px}.dk-pkinfo small.ok{color:var(--ok)}.dk-pkinfo small.err{color:var(--err)}.dk-pkbtns{display:flex;gap:6px}
 @media(max-width:560px){.dk-tile{grid-template-columns:36px minmax(0,1fr)}.dk-tact{grid-column:1/-1}.dk-save{margin:18px -16px -18px;padding:12px 16px}}
 `;
   const st = document.createElement("style");
@@ -56,10 +57,12 @@
 <p class="field-hint">Material Design Icons (mdi:...). The font file (about 1.3 MB) is stored on the device; "Install" downloads it in this browser and sends it to the device. Without it the deck shows a few built-in symbols.</p>
 <div class="dk-row" style="margin-top:10px"><button type="button" class="btn btn-accent" id="dkIcNet">Install MDI 7.4.47</button><button type="button" class="btn" id="dkIcFile">Upload .ttf file</button><input type="file" id="dkIcInput" accept=".ttf" hidden></div>
 <div class="dk-status"><span class="dk-dot" id="dkIcDot"></span><span id="dkIcState">checking...</span></div>
-<h3 class="card-title" style="margin-top:18px">Brand icons</h3>
-<p class="field-hint">Custom Brand Icons (phu:) by elax46, installed from <a href="https://github.com/elax46/custom-brand-icons" target="_blank" rel="noopener">their GitHub</a>, not bundled. Needs a mounted microSD card. Enable it in <a href="#" data-page="maintenance">Maintenance &gt; microSD card</a>. You can also upload a .js subset from the upstream Icon Finder.</p>
-<div class="dk-row" style="margin-top:10px"><button type="button" class="btn btn-accent" id="dkBrNet" disabled>Install latest from GitHub</button><button type="button" class="btn" id="dkBrFile" disabled>Upload .js file</button><button type="button" class="btn" id="dkBrRemove" disabled>Remove</button><input type="file" id="dkBrInput" accept=".js" hidden></div>
-<div class="dk-status"><span class="dk-dot" id="dkBrDot"></span><span id="dkBrState">checking...</span></div></div>
+<h3 class="card-title" style="margin-top:18px">Icon packs</h3>
+<p class="field-hint">More icon sets on the microSD card, each under its own prefix (si:github, ph:house). "Install" downloads the set in this browser, turns it into a font and sends it to the device; nothing is bundled. Sets drawn with lines (Tabler, Lucide) or in color cannot be converted. Needs a mounted microSD card: enable it in <a href="#" data-page="maintenance">Maintenance &gt; microSD card</a>.</p>
+<div class="dk-pk" id="dkPk"></div>
+<div class="dk-row" style="margin-top:10px"><input type="text" id="dkPkPrefix" placeholder="Other Iconify set, e.g. fa6-solid, ri, mingcute" autocomplete="off" spellcheck="false" style="flex:1;min-width:0"><button type="button" class="btn" id="dkPkAdd" disabled>Install</button><button type="button" class="btn" id="dkPkFile" disabled>Upload file</button><input type="file" id="dkPkInput" accept=".js,.json" hidden></div>
+<p class="field-hint">The prefix is the part before the colon on <a href="https://icon-sets.iconify.design/" target="_blank" rel="noopener">icon-sets.iconify.design</a>. "Upload file" takes an Iconify .json set (its own prefix, or the one typed above) or a Custom Brand Icons .js subset.</p>
+<div class="dk-status"><span class="dk-dot" id="dkPkDot"></span><span id="dkPkState">checking...</span></div></div>
 <div class="card" id="dkPrnCard"><div class="card-head"><h2 class="card-title">Printers</h2><span class="tag" id="dkPrnTag">Bambu Lab</span></div>
 <p class="field-hint">The deck talks to the printer directly over the LAN: it must be in LAN mode or have LAN access on, and its serial and access code are stored only on the device. Printers and pages apply on "Save to device" below; Save serial and code applies at once.</p>
 <div id="dkPrnBody">
@@ -72,7 +75,7 @@
   document.body.insertAdjacentHTML(
     "beforeend",
     `<div class="dk-modal" id="dkIcPick"><div class="dk-sheet"><div class="dk-head">
-<div class="dk-row"><input type="text" id="dkIcQ" placeholder="Search icons, e.g. lamp, fan, thermometer" autocomplete="off" style="flex:1"><button type="button" class="btn" id="dkIcAuto">Automatic</button><button type="button" class="btn" id="dkIcNone">None</button><button type="button" class="btn" id="dkIcClose">Close</button></div>
+<div class="dk-row"><input type="text" id="dkIcQ" placeholder="Search icons, e.g. lamp, fan, thermometer" autocomplete="off" style="flex:1;min-width:0"><select id="dkIcSet" style="width:auto"></select><button type="button" class="btn" id="dkIcAuto">Automatic</button><button type="button" class="btn" id="dkIcNone">None</button><button type="button" class="btn" id="dkIcClose">Close</button></div>
 <div class="dk-status"><span id="dkIcInfo">-</span></div></div>
 <div class="dk-igrid" id="dkIcGrid"></div></div></div>`,
   );
@@ -2767,6 +2770,7 @@
   const MDI_URL = "https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/fonts/materialdesignicons-webfont.ttf";
   let mdi = null,
     mdiNames = [],
+    pkAll = null, // every icon name for the picker, MDI ones bare
     icFor = -1;
   // name -> codepoint from the font's own glyph names (post v2 + cmap format 12).
   function parseMdi(buf) {
@@ -2809,9 +2813,12 @@
   }
   const iconCp = (n) => {
     if (!n) return 0;
-    if (n.startsWith("phu:")) return cbi ? cbi.get(n.slice(4)) || 0 : 0;
-    if (n.startsWith("mdi:")) n = n.slice(4);
-    else if (n.includes(":")) return 0;
+    const colon = n.indexOf(":");
+    if (colon >= 0 && !n.startsWith("mdi:")) {
+      const p = packs.get(n.slice(0, colon));
+      return p ? p.map.get(n.slice(colon + 1)) || 0 : 0;
+    }
+    if (colon >= 0) n = n.slice(4);
     return mdi ? mdi.get(n) || 0 : 0;
   };
   const tileCp = (t) => iconCp(t.icon);
@@ -2822,6 +2829,7 @@
       const buf = await r.arrayBuffer();
       mdi = parseMdi(buf);
       mdiNames = [...mdi.keys()].sort();
+      pkAll = null;
       const f = new FontFace("dkmdi", buf);
       await f.load();
       document.fonts.add(f);
@@ -2883,7 +2891,12 @@
     e.target.value = "";
     if (f) icInstall(f);
   };
-  let cbi = null, cbiNames = [], cbiFace = null, brState = null, brBusy = false, opentypeLoad = null;
+  // Icon packs on the device's microSD (deck_icons.h). In the browser every
+  // pack gets its own codepoint range too, one after another in prefix order,
+  // and all of them draw as the "dkcbi" family.
+  const packs = new Map(); // prefix -> {prefix, count, size, version, names, map, base, face, err}
+  const pkCache = new Map(); // prefix -> {size, version, buf, names}: skips the download after an install
+  let pkState = null, pkBusy = false, pkGen = 0, opentypeLoad = null;
   const brandEncoder = new TextEncoder();
   const validBrandName = (n) => /^[\p{L}\p{N}_.-]+$/u.test(n) && brandEncoder.encode(n).length <= 127;
   const brandOrder = (a, b) => {
@@ -2892,8 +2905,18 @@
     return x.length - y.length;
   };
   const brandVersion = /^[A-Za-z0-9_.+-]{1,63}$/;
-  const brProgress = (text) => { $("dkBrState").textContent = text; };
+  const pkProgress = (text) => { $("dkPkState").textContent = text; };
   const brYield = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const mb = (n) => (n / 1024 / 1024).toFixed(2);
+  const pkPrefixOk = (p) => /^[a-z0-9][a-z0-9-]{0,23}$/.test(p) && p !== "mdi" && p !== "cbi";
+  const PH_WEIGHT = /-(?:bold|thin|light|duotone)$/;
+  // The sets with a button; any other Iconify set goes by its prefix.
+  const PACKS = [
+    { prefix: "phu", name: "Custom Brand Icons", what: "Brand and device logos by elax46", link: "https://github.com/elax46/custom-brand-icons" },
+    { prefix: "si", set: "simple-icons", name: "Simple Icons", what: "Logos of brands and services", link: "https://simpleicons.org" },
+    { prefix: "ph", set: "ph", name: "Phosphor", what: "Regular and fill styles", link: "https://phosphoricons.com",
+      keep: (n, all) => { const m = PH_WEIGHT.exec(n); return !m || !all[n.slice(0, m.index)]; } },
+  ];
 
   function parseBrandSource(src) {
     if (src.length > 12 * 1024 * 1024) throw new Error("The .js file is too big");
@@ -3023,10 +3046,117 @@
     return opentypeLoad;
   }
 
-  async function convertBrand(src, version) {
-    const icons = parseBrandSource(src), names = [...icons.keys()].sort(brandOrder);
-    if (!brandVersion.test(version)) throw new Error("Invalid release version");
-    brProgress("Loading the font converter...");
+  // Custom Brand Icons .js entries (one path, 0 0 24 24) as convertPack icons.
+  const brandIcons = (map) =>
+    new Map([...map].map(([n, d]) => [n, { paths: [d], left: 0, top: 0, width: 24, height: 24, rotate: 0 }]));
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  // The filled shapes of an Iconify body as path data; null when it needs
+  // strokes, transparency, transforms or masks (a font glyph is one solid fill).
+  function svgPaths(body, parser) {
+    const doc = parser.parseFromString('<svg xmlns="' + SVG_NS + '">' + body + "</svg>", "image/svg+xml");
+    if (doc.getElementsByTagName("parsererror").length) return null;
+    const out = [];
+    const num = (el, a) => parseFloat(el.getAttribute(a)) || 0;
+    const walk = (el, fill) => {
+      for (const c of el.children) {
+        const tag = c.localName;
+        if (/^(title|desc|metadata)$/.test(tag)) continue;
+        if (c.hasAttribute("transform") || c.hasAttribute("mask") || c.hasAttribute("clip-path") ||
+            c.hasAttribute("filter") || /stroke|opacity|fill/.test(c.getAttribute("style") || "")) return false;
+        const stroke = c.getAttribute("stroke");
+        if (stroke && stroke !== "none") return false;
+        for (const a of ["opacity", "fill-opacity"]) if (c.hasAttribute(a) && num(c, a) < 1) return false;
+        const f = c.getAttribute("fill") || fill;
+        if (tag === "g") {
+          if (walk(c, f) === false) return false;
+          continue;
+        }
+        if (f === "none") continue;
+        let d = "";
+        if (tag === "path") d = c.getAttribute("d") || "";
+        else if (tag === "circle" || tag === "ellipse") {
+          const cx = num(c, "cx"), cy = num(c, "cy"), rx = num(c, tag === "circle" ? "r" : "rx");
+          const ry = tag === "circle" ? rx : num(c, "ry");
+          if (rx > 0 && ry > 0)
+            d = `M${cx - rx} ${cy}A${rx} ${ry} 0 1 0 ${cx + rx} ${cy}A${rx} ${ry} 0 1 0 ${cx - rx} ${cy}Z`;
+        } else if (tag === "rect") {
+          const x = num(c, "x"), y = num(c, "y"), w = num(c, "width"), h = num(c, "height");
+          let rx = num(c, c.hasAttribute("rx") ? "rx" : "ry"), ry = c.hasAttribute("ry") ? num(c, "ry") : rx;
+          rx = Math.min(rx, w / 2);
+          ry = Math.min(ry, h / 2);
+          if (w > 0 && h > 0)
+            d = rx > 0 && ry > 0
+              ? `M${x + rx} ${y}H${x + w - rx}A${rx} ${ry} 0 0 1 ${x + w} ${y + ry}V${y + h - ry}` +
+                `A${rx} ${ry} 0 0 1 ${x + w - rx} ${y + h}H${x + rx}A${rx} ${ry} 0 0 1 ${x} ${y + h - ry}` +
+                `V${y + ry}A${rx} ${ry} 0 0 1 ${x + rx} ${y}Z`
+              : `M${x} ${y}H${x + w}V${y + h}H${x}Z`;
+        } else if (tag === "polygon" || tag === "polyline") {
+          const pts = (c.getAttribute("points") || "").trim().split(/[\s,]+/).map(Number);
+          if (pts.length >= 6 && pts.length % 2 === 0 && pts.every(Number.isFinite))
+            d = "M" + pts.slice(0, 2).join(" ") + "L" + pts.slice(2).join(" ") + "Z";
+        } else return false;
+        if (d) out.push(d);
+      }
+    };
+    if (walk(doc.documentElement, null) === false || !out.length) return null;
+    return out;
+  }
+
+  // An Iconify JSON set -> {icons, skipped}; keep(name, icons) filters names.
+  async function iconifyIcons(json, keep) {
+    if (!json || typeof json !== "object" || !json.icons || typeof json.icons !== "object")
+      throw new Error("Not an Iconify icon set");
+    if (json.info && json.info.palette) throw new Error("This set is in color; the deck draws icons in one color");
+    const W = json.width || 16, H = json.height || 16, L = json.left || 0, T = json.top || 0;
+    const parser = new DOMParser(), icons = new Map(), skipped = [], all = Object.entries(json.icons);
+    for (let i = 0; i < all.length; i++) {
+      if (i % 200 === 0) {
+        pkProgress("Reading the set... " + i + "/" + all.length);
+        await brYield();
+      }
+      const [name, ic] = all[i];
+      if (!ic || typeof ic.body !== "string" || ic.hidden || (keep && !keep(name, json.icons))) continue;
+      const paths = validBrandName(name) ? svgPaths(ic.body, parser) : null;
+      if (!paths) {
+        skipped.push(name);
+        continue;
+      }
+      icons.set(name, {
+        paths, left: ic.left ?? L, top: ic.top ?? T, width: ic.width ?? W, height: ic.height ?? H,
+        hFlip: !!ic.hFlip, vFlip: !!ic.vFlip, rotate: (((ic.rotate || 0) % 4) + 4) % 4,
+      });
+      if (icons.size > 20000) throw new Error("Too many icons (the limit is 20,000)");
+    }
+    return { icons, skipped };
+  }
+
+  // Icon box -> font units: centred in the 512 em square, y up, with the
+  // flips and quarter turns Iconify applies (flips first).
+  function packTransform(ic) {
+    const w0 = ic.width, h0 = ic.height, odd = ic.rotate % 2 === 1;
+    const W = odd ? h0 : w0, H = odd ? w0 : h0, k = 512 / Math.max(W, H);
+    const ox = (512 - W * k) / 2, oy = (512 - H * k) / 2;
+    return (x, y) => {
+      let u = x - ic.left, v = y - ic.top, cw = w0, ch = h0;
+      if (ic.hFlip) u = w0 - u;
+      if (ic.vFlip) v = h0 - v;
+      for (let r = 0; r < ic.rotate; r++) {
+        const nu = ch - v;
+        v = u;
+        u = nu;
+        [cw, ch] = [ch, cw];
+      }
+      return [Math.round(ox + u * k), Math.round(448 - oy - v * k)];
+    };
+  }
+
+  // icons: name -> {paths, left, top, width, height, hFlip, vFlip, rotate}.
+  // Glyph i of the font is U+100000+i, in name order (the device's index).
+  async function convertPack(icons, version, family) {
+    const names = [...icons.keys()].sort(brandOrder);
+    if (!brandVersion.test(version)) throw new Error("Invalid set version");
+    pkProgress("Loading the font converter...");
     const ot = await loadOpentype();
     const notdef = () => new ot.Glyph({ name: ".notdef", unicode: 0, advanceWidth: 512, path: new ot.Path() });
     const cffLen = (glyphs) => {
@@ -3038,156 +3168,403 @@
     };
     const emptyCff = cffLen([notdef()]);
     const glyphs = [notdef()], kept = [], skipped = [];
-    const X = (v) => Math.round(v * 512 / 24), Y = (v) => Math.round(448 - v * 512 / 24);
     for (let i = 0; i < names.length; i++) {
       if (i % 24 === 0) {
-        brProgress("Converting " + names.length + " icons... " + i + "/" + names.length);
+        pkProgress("Converting " + names.length + " icons... " + i + "/" + names.length);
         await brYield();
       }
-      const path = new ot.Path();
+      const ic = icons.get(names[i]), at = packTransform(ic), path = new ot.Path();
       try {
-        const cmds = parseBrandPath(icons.get(names[i]));
-        for (const c of cmds) {
-          if (c.slice(1).some((v) => !Number.isFinite(v) || Math.abs(v) > 1e7)) throw new Error("Invalid path coordinate");
-          if (c[0] === "M") path.moveTo(X(c[1]), Y(c[2]));
-          else if (c[0] === "L") path.lineTo(X(c[1]), Y(c[2]));
-          else if (c[0] === "C") path.curveTo(X(c[1]), Y(c[2]), X(c[3]), Y(c[4]), X(c[5]), Y(c[6]));
-          else path.close();
+        let n = 0;
+        for (const d of ic.paths) {
+          const cmds = parseBrandPath(d);
+          n += cmds.length;
+          for (const c of cmds) {
+            if (c.slice(1).some((v) => !Number.isFinite(v) || Math.abs(v) > 1e7)) throw new Error("Invalid path coordinate");
+            if (c[0] === "Z") {
+              path.close();
+              continue;
+            }
+            const q = [];
+            for (let k = 1; k < c.length; k += 2) q.push(...at(c[k], c[k + 1]));
+            if (c[0] === "M") path.moveTo(q[0], q[1]);
+            else if (c[0] === "L") path.lineTo(q[0], q[1]);
+            else path.curveTo(q[0], q[1], q[2], q[3], q[4], q[5]);
+          }
         }
         // Browsers reject a font with a charstring over 64 KB (Type 2 limit); only huge paths can reach it.
-        if (cmds.length > 4000) {
+        if (n > 4000) {
           const g = new ot.Glyph({ name: names[i], unicode: 0x100000, advanceWidth: 512, path });
-          if (cffLen([notdef(), g]) - emptyCff > 65535) { skipped.push(names[i]); continue; }
+          if (cffLen([notdef(), g]) - emptyCff > 65535) throw new Error("Too complex");
         }
-      } catch (e) { throw new Error(names[i] + ": " + e.message); }
+      } catch (e) {
+        skipped.push(names[i]);
+        continue;
+      }
       glyphs.push(new ot.Glyph({ name: names[i], unicode: 0x100000 + kept.length, advanceWidth: 512, path }));
       kept.push(names[i]);
     }
-    if (!kept.length) throw new Error("No usable icons in this file");
-    brProgress("Building the font...");
+    if (!kept.length) throw new Error("No icon in this set can be converted");
+    pkProgress("Building the font (" + kept.length + " icons)...");
     await brYield();
-    const font = new ot.Font({ familyName: "Custom Brand Icons", styleName: "Regular", unitsPerEm: 512,
+    const font = new ot.Font({ familyName: family, styleName: "Regular", unitsPerEm: 512,
       ascender: 448, descender: -64, glyphs });
     const data = font.toArrayBuffer(), index = "#" + version + "\n" + kept.join("\n") + "\n";
-    if (data.byteLength > 3 * 1024 * 1024 || brandEncoder.encode(index).length > 512 * 1024)
-      throw new Error("Converted icon set is too big");
-    return { data, index, skipped };
+    if (data.byteLength > 8 * 1024 * 1024)
+      throw new Error("The converted set is too big (" + mb(data.byteLength) + " MB, the limit is 8 MB)");
+    if (brandEncoder.encode(index).length > 512 * 1024) throw new Error("Too many icon names");
+    return { data, index, kept: kept.length, skipped };
   }
 
-  function brButtons() {
-    $("dkBrNet").disabled = $("dkBrFile").disabled = brBusy || !brState || !brState.sd;
-    $("dkBrRemove").disabled = brBusy || !brState || !brState.sd || !brState.loaded;
+  // A copy of a pack font with its glyphs moved from U+100000+i to U+100000+delta+i
+  // (checksums fixed), so packs do not collide in the browser.
+  function shiftCmap(buf, delta) {
+    const out = buf.slice(0), d = new DataView(out), u = new Uint8Array(out);
+    const sum = (off, len) => {
+      let s = 0;
+      for (let p = 0; p < len; p += 4) {
+        let w = 0;
+        for (let k = 0; k < 4; k++) w = w * 256 + (p + k < len ? u[off + p + k] : 0);
+        s = (s + w) % 4294967296;
+      }
+      return s;
+    };
+    let cmapRec = -1, head = -1;
+    for (let i = 0, n = d.getUint16(4); i < n; i++) {
+      const r = 12 + 16 * i, tag = String.fromCharCode(u[r], u[r + 1], u[r + 2], u[r + 3]);
+      if (tag === "cmap") cmapRec = r;
+      else if (tag === "head") head = d.getUint32(r + 8);
+    }
+    if (cmapRec < 0 || head < 0) throw new Error("invalid pack font");
+    if (!delta) return out;
+    const co = d.getUint32(cmapRec + 8), cl = d.getUint32(cmapRec + 12), seen = new Set();
+    for (let i = 0, ns = d.getUint16(co + 2); i < ns; i++) {
+      const so = co + d.getUint32(co + 8 + 8 * i);
+      if (seen.has(so) || d.getUint16(so) !== 12) continue;
+      seen.add(so);
+      for (let g = 0, ng = d.getUint32(so + 12); g < ng; g++) {
+        const b = so + 16 + 12 * g, s0 = d.getUint32(b);
+        if (s0 < 0x100000) continue;
+        d.setUint32(b, s0 + delta);
+        d.setUint32(b + 4, d.getUint32(b + 4) + delta);
+      }
+    }
+    d.setUint32(cmapRec + 4, sum(co, cl));
+    d.setUint32(head + 8, 0);
+    d.setUint32(head + 8, (0xb1b0afba - sum(0, out.byteLength) + 4294967296) % 4294967296);
+    return out;
   }
-  function brStatus(s) {
-    brState = s;
-    $("dkBrDot").className = "dk-dot" + (s.loaded ? " ok" : "");
-    brProgress(!s.sd ? "needs a microSD card" : s.loaded
-      ? s.count + " icons, " + s.version + ", " + (s.size / 1024 / 1024).toFixed(2) + " MB" : "not installed");
-    brButtons();
-  }
-  function clearBrand() {
-    cbi = null;
-    cbiNames = [];
-    if (cbiFace) document.fonts.delete(cbiFace);
-    cbiFace = null;
-  }
-  async function loadBrand(size) {
-    const responses = await Promise.all([fetch("/cbi.otf?v=" + size), fetch("/cbi.names?v=" + size)]);
-    for (const r of responses) if (!r.ok) throw new Error("HTTP " + r.status);
-    const [buf, text] = await Promise.all([responses[0].arrayBuffer(), responses[1].text()]);
+
+  function parsePackNames(text) {
     const lines = text.split("\n"), header = lines.shift();
     if (lines[lines.length - 1] === "") lines.pop();
     if (!header.startsWith("#") || !brandVersion.test(header.slice(1)) || !lines.length || lines.length > 20000 ||
         lines.some((n, i) => !validBrandName(n) || (i && brandOrder(lines[i - 1], n) >= 0)))
-      throw new Error("Invalid brand names file");
-    const face = new FontFace("dkcbi", buf);
-    await face.load();
-    clearBrand();
-    cbi = new Map(lines.map((n, i) => [n, 0x100000 + i]));
-    cbiNames = lines;
-    cbiFace = face;
-    document.fonts.add(face);
-    if (deck) renderPage();
+      throw new Error("invalid names file");
+    return lines;
   }
-  async function brRefresh() {
-    brBusy = true;
-    brButtons();
-    try {
-      const s = await api("/api/deck/brand");
-      brStatus(s);
-      if (s.loaded) await loadBrand(s.size);
-      else clearBrand();
-    } catch (e) {
-      $("dkBrDot").className = "dk-dot err";
-      brProgress("Brand icons unavailable: " + e.message);
-    } finally { brBusy = false; brButtons(); }
+
+  // The pack fonts this browser has seen, so the editor does not ask the
+  // device for them again: a font takes minutes over a weak link, and the deck
+  // pauses while it streams.
+  let pkDbOpen = null;
+  const pkDb = () =>
+    pkDbOpen ||
+    (pkDbOpen = new Promise((resolve) => {
+      try {
+        const r = indexedDB.open("touchdeck-packs", 1);
+        r.onupgradeneeded = () => r.result.createObjectStore("packs");
+        r.onsuccess = () => resolve(r.result);
+        r.onerror = () => resolve(null);
+      } catch (e) {
+        resolve(null);
+      }
+    }));
+  async function pkDbGet(prefix) {
+    const db = await pkDb();
+    if (!db) return null;
+    return new Promise((resolve) => {
+      try {
+        const q = db.transaction("packs").objectStore("packs").get(prefix);
+        q.onsuccess = () => resolve(q.result || null);
+        q.onerror = () => resolve(null);
+      } catch (e) {
+        resolve(null);
+      }
+    });
   }
-  async function brInstall(file) {
-    if (brBusy || !brState || !brState.sd) return;
-    brBusy = true;
-    brButtons();
-    $("dkBrDot").className = "dk-dot busy";
+  async function pkDbPut(prefix, value) {
+    const db = await pkDb();
+    if (!db) return;
     try {
-      let src, version = "file";
-      if (file) {
-        if (file.size > 12 * 1024 * 1024) throw new Error("The .js file is too big");
-        brProgress("Reading the .js file...");
-        src = await file.text();
-      } else {
-        brProgress("Finding the latest GitHub release...");
+      const t = db.transaction("packs", "readwrite").objectStore("packs");
+      if (value) t.put(value, prefix);
+      else t.delete(prefix);
+    } catch (e) {}
+  }
+  const pkKeep = (prefix, c) => {
+    pkCache.set(prefix, c);
+    pkDbPut(prefix, c);
+  };
+
+  // The font of an installed pack, cheapest source first: this browser, the
+  // set it came from (same version: the converter gives the same bytes), the
+  // device.
+  async function pkFont(p) {
+    const fits = (c) => c && c.size === p.size && c.version === p.version && c.names.length === p.count;
+    let c = pkCache.get(p.prefix);
+    if (fits(c)) return c;
+    c = await pkDbGet(p.prefix);
+    if (fits(c)) {
+      pkCache.set(p.prefix, c);
+      return c;
+    }
+    if (p.version !== "file") {
+      try {
+        const src = await pkSource(p.prefix, null, p.version);
+        const built = await convertPack(src.icons, src.version, "TouchDeck " + p.prefix);
+        c = { size: built.data.byteLength, version: p.version, buf: built.data, names: built.index.split("\n").slice(1, -1) };
+        if (fits(c)) {
+          pkKeep(p.prefix, c);
+          return c;
+        }
+      } catch (e) {}
+    }
+    pkProgress("Downloading the " + p.prefix + " font from the device (the deck pauses meanwhile)...");
+    c = Object.assign({ size: p.size, version: p.version }, await pkFetch(p));
+    pkKeep(p.prefix, c);
+    return c;
+  }
+
+  async function pkFetch(p) {
+    const q = "?p=" + encodeURIComponent(p.prefix) + "&v=" + p.size;
+    const responses = await Promise.all([fetch("/api/deck/pack.otf" + q), fetch("/api/deck/pack.names" + q)]);
+    for (const r of responses) if (!r.ok) throw new Error("HTTP " + r.status);
+    const [buf, text] = await Promise.all([responses[0].arrayBuffer(), responses[1].text()]);
+    return { buf, names: parsePackNames(text) };
+  }
+
+  // Loads the packs of a device status into the browser, one at a time
+  // (every download holds up the device while it streams).
+  async function pkLoad(list) {
+    const gen = ++pkGen;
+    for (const p of packs.values()) if (p.face) document.fonts.delete(p.face);
+    packs.clear();
+    pkAll = null;
+    let base = 0x100000;
+    for (const s of list) {
+      packs.set(s.prefix, { prefix: s.prefix, count: s.count, size: s.size, version: s.version,
+        names: [], map: new Map(), base, face: null, err: "" });
+      base += s.count;
+    }
+    pkRender();
+    const note = $("dkPkState").textContent;
+    for (const p of packs.values()) {
+      try {
+        const c = await pkFont(p);
+        if (gen !== pkGen) return;
+        if (c.names.length !== p.count) throw new Error("its names do not match the device");
+        if (p.base + p.count > 0x10fffe) throw new Error("too many icons");
+        const face = new FontFace("dkcbi", shiftCmap(c.buf, p.base - 0x100000), {
+          unicodeRange: "U+" + p.base.toString(16) + "-" + (p.base + p.count - 1).toString(16) });
+        await face.load();
+        if (gen !== pkGen) return;
+        document.fonts.add(face);
+        p.face = face;
+        p.names = c.names;
+        p.map = new Map(c.names.map((n, i) => [n, p.base + i]));
+      } catch (e) {
+        if (gen !== pkGen) return;
+        p.err = e.message;
+      }
+      pkAll = null;
+      pkRender();
+      if (deck) renderPage();
+    }
+    pkProgress(note);
+  }
+
+  function pkRender() {
+    const on = !!(pkState && pkState.sd) && !pkBusy, dis = on ? "" : " disabled";
+    const rows = PACKS.map((d) => Object.assign({ have: packs.get(d.prefix) }, d)).concat(
+      [...packs.values()].filter((p) => !PACKS.some((d) => d.prefix === p.prefix)).map((p) => ({
+        prefix: p.prefix, name: p.prefix, what: "Iconify set", have: p,
+        link: "https://icon-sets.iconify.design/" + p.prefix + "/" })));
+    $("dkPk").innerHTML = rows.map((r) => {
+      const p = r.have;
+      const state = !p ? "not installed"
+        : p.count + " icons, " + p.version + ", " + mb(p.size) + " MB" +
+          (p.err ? " - the portal could not read it: " + p.err : p.face ? "" : " - loading...");
+      return '<div class="dk-pkrow"><div class="dk-pkinfo"><strong>' + esc(r.name) + "</strong> <code>" + esc(r.prefix) +
+        ":</code><small>" + esc(r.what) + ' &middot; <a href="' + esc(r.link) + '" target="_blank" rel="noopener">source</a></small>' +
+        '<small class="' + (p ? (p.err ? "err" : "ok") : "") + '">' + esc(state) + '</small></div><div class="dk-pkbtns">' +
+        '<button type="button" class="btn' + (p ? "" : " btn-accent") + '" data-pk-install="' + esc(r.prefix) + '"' + dis + ">" +
+        (p ? "Update" : "Install") + "</button>" +
+        (p ? '<button type="button" class="btn" data-pk-remove="' + esc(r.prefix) + '"' + dis + ">Remove</button>" : "") +
+        "</div></div>";
+    }).join("");
+    $("dkPk").querySelectorAll("[data-pk-install]").forEach((b) => (b.onclick = () => pkInstall(b.dataset.pkInstall)));
+    $("dkPk").querySelectorAll("[data-pk-remove]").forEach((b) => (b.onclick = () => pkRemove(b.dataset.pkRemove)));
+    $("dkPkAdd").disabled = $("dkPkFile").disabled = !on;
+  }
+
+  // -> {icons, version, skipped}. given: a Custom Brand Icons .js File, or a
+  // parsed Iconify set; nothing = download the latest.
+  async function pkSource(prefix, given, pinned) {
+    if (given instanceof Blob) {
+      if (given.size > 12 * 1024 * 1024) throw new Error("The .js file is too big");
+      pkProgress("Reading the .js file...");
+      return { icons: brandIcons(parseBrandSource(await given.text())), version: "file", skipped: [] };
+    }
+    if (given) {
+      const v = String((given.info && given.info.version) || "").replace(/[^A-Za-z0-9_.+-]/g, "").slice(0, 63);
+      return Object.assign({ version: v || "file" }, await iconifyIcons(given, null));
+    }
+    if (prefix === "phu") {
+      let tags = pinned ? ["v" + pinned, pinned] : null;
+      if (!tags) {
+        pkProgress("Finding the latest GitHub release...");
         const release = await fetch("https://api.github.com/repos/elax46/custom-brand-icons/releases/latest");
         if (!release.ok) throw new Error("GitHub HTTP " + release.status);
         const tag = (await release.json()).tag_name;
         if (typeof tag !== "string" || !brandVersion.test(tag)) throw new Error("Invalid GitHub release tag");
-        version = tag.replace(/^v(?=\d)/, "");
-        brProgress("Downloading Custom Brand Icons " + version + "...");
-        const r = await fetch("https://cdn.jsdelivr.net/gh/elax46/custom-brand-icons@" + encodeURIComponent(tag) + "/dist/custom-brand-icons.js");
-        if (!r.ok) throw new Error("Download HTTP " + r.status);
-        src = await r.text();
+        tags = [tag];
       }
-      const { data, index, skipped } = await convertBrand(src, version);
-      brProgress("Sending to the device and installing...");
-      const fd = new FormData();
-      fd.append("font", new Blob([data], { type: "font/otf" }), "cbi.otf");
-      fd.append("names", new Blob([index], { type: "text/plain" }), "cbi.names");
-      const s = await api("/api/deck/brand", { method: "POST", body: fd });
-      clearBrand();
-      brStatus(s);
-      try {
-        await loadBrand(s.size);
-        if (skipped.length) brProgress($("dkBrState").textContent + " (skipped, too complex: " + skipped.join(", ") + ")");
-      } catch (e) { brProgress("Installed, but the portal could not read the font: " + e.message); }
-    } catch (e) {
-      $("dkBrDot").className = "dk-dot err";
-      brProgress("Not installed: " + e.message + (file ? "" : '. Download custom-brand-icons.js and use "Upload .js file".'));
-    } finally { brBusy = false; brButtons(); }
+      const version = tags[0].replace(/^v(?=\d)/, "");
+      pkProgress("Downloading Custom Brand Icons " + version + "...");
+      for (const tag of tags) {
+        const r = await fetch("https://cdn.jsdelivr.net/gh/elax46/custom-brand-icons@" + encodeURIComponent(tag) + "/dist/custom-brand-icons.js");
+        if (r.ok) return { icons: brandIcons(parseBrandSource(await r.text())), version, skipped: [] };
+        if (tag === tags[tags.length - 1]) throw new Error("Download HTTP " + r.status);
+      }
+    }
+    const def = PACKS.find((d) => d.prefix === prefix), set = def ? def.set : prefix;
+    let version = pinned;
+    if (!version) {
+      pkProgress("Finding the latest " + set + " set...");
+      const r = await fetch("https://data.jsdelivr.com/v1/packages/npm/@iconify-json/" + set + "/resolved");
+      if (r.status === 404) throw new Error('There is no Iconify set "' + set + '"');
+      if (!r.ok) throw new Error("jsDelivr HTTP " + r.status);
+      version = (await r.json()).version;
+      if (typeof version !== "string" || !brandVersion.test(version)) throw new Error("Invalid set version");
+    }
+    pkProgress("Downloading " + set + " " + version + "...");
+    const j = await fetch("https://cdn.jsdelivr.net/npm/@iconify-json/" + set + "@" + version + "/icons.json");
+    if (!j.ok) throw new Error("Download HTTP " + j.status);
+    return Object.assign({ version }, await iconifyIcons(await j.json(), def && def.keep));
   }
-  $("dkBrNet").onclick = () => brInstall(null);
-  $("dkBrFile").onclick = () => $("dkBrInput").click();
-  $("dkBrInput").onchange = (e) => {
+
+  async function pkInstall(prefix, given) {
+    if (pkBusy || !pkState || !pkState.sd) return;
+    if (!pkPrefixOk(prefix)) {
+      pkProgress('Not installed: "' + prefix + '" is not a valid prefix (a-z, 0-9 and -, as on icon-sets.iconify.design)');
+      return;
+    }
+    const max = pkState.max || 8;
+    if (!packs.has(prefix) && packs.size >= max) {
+      pkProgress("Not installed: the device holds " + max + " packs, remove one first");
+      return;
+    }
+    pkBusy = true;
+    pkRender();
+    $("dkPkDot").className = "dk-dot busy";
+    try {
+      const src = await pkSource(prefix, given);
+      if (!src.icons.size)
+        throw new Error("no icon in this set can be converted" + (src.skipped.length ? " (it is drawn with lines or in color)" : ""));
+      const { data, index, kept, skipped } = await convertPack(src.icons, src.version, "TouchDeck " + prefix);
+      pkProgress("Sending " + mb(data.byteLength) + " MB to the device and installing...");
+      const fd = new FormData();
+      fd.append("font", new Blob([data], { type: "font/otf" }), prefix + ".otf");
+      fd.append("names", new Blob([index], { type: "text/plain" }), prefix + ".names");
+      const s = await api("/api/deck/packs?p=" + encodeURIComponent(prefix), { method: "POST", body: fd });
+      const info = (s.packs || []).find((p) => p.prefix === prefix);
+      if (info) pkKeep(prefix, { size: info.size, version: info.version, buf: data, names: index.split("\n").slice(1, -1) });
+      pkState = s;
+      const left = src.skipped.concat(skipped);
+      $("dkPkDot").className = "dk-dot ok";
+      pkProgress("Installed " + prefix + ": " + kept + " icons" + (left.length
+        ? ", " + left.length + " skipped (lines, color or too complex: " + left.slice(0, 5).join(", ") + (left.length > 5 ? "..." : "") + ")"
+        : ""));
+      pkBusy = false;
+      await pkLoad(s.packs || []);
+    } catch (e) {
+      $("dkPkDot").className = "dk-dot err";
+      pkProgress("Not installed: " + e.message + (given ? "" : '. You can also download the set yourself and use "Upload file".'));
+    } finally {
+      pkBusy = false;
+      pkRender();
+    }
+  }
+
+  async function pkRemove(prefix) {
+    if (pkBusy || !pkState || !pkState.sd) return;
+    pkBusy = true;
+    pkRender();
+    pkProgress("Removing " + prefix + "...");
+    try {
+      const s = await api("/api/deck/packs/remove?p=" + encodeURIComponent(prefix), { method: "POST" });
+      pkState = s;
+      pkCache.delete(prefix);
+      pkDbPut(prefix, null);
+      pkProgress("Removed " + prefix + ".");
+      pkBusy = false;
+      await pkLoad(s.packs || []);
+    } catch (e) {
+      pkProgress("Could not remove " + prefix + ": " + e.message);
+    } finally {
+      pkBusy = false;
+      pkRender();
+    }
+  }
+
+  async function pkRefresh() {
+    try {
+      const s = await api("/api/deck/packs");
+      pkState = s;
+      const n = (s.packs || []).length;
+      $("dkPkDot").className = "dk-dot" + (n ? " ok" : "");
+      pkProgress(!s.sd ? "Needs a microSD card" : n ? n + " installed" : "None installed");
+      await pkLoad(s.packs || []);
+    } catch (e) {
+      $("dkPkDot").className = "dk-dot err";
+      pkProgress("Icon packs unavailable: " + e.message);
+    }
+  }
+  $("dkPkAdd").onclick = () => pkInstall($("dkPkPrefix").value.trim().toLowerCase());
+  $("dkPkPrefix").onkeydown = (e) => {
+    if (e.key === "Enter") $("dkPkAdd").click();
+  };
+  $("dkPkFile").onclick = () => $("dkPkInput").click();
+  $("dkPkInput").onchange = async (e) => {
     const file = e.target.files[0];
     e.target.value = "";
-    if (file) brInstall(file);
-  };
-  $("dkBrRemove").onclick = async () => {
-    if (brBusy || !brState || !brState.sd) return;
-    brBusy = true;
-    brButtons();
-    brProgress("Removing brand icons...");
+    if (!file) return;
+    if (/\.js$/i.test(file.name)) return pkInstall("phu", file);
     try {
-      const s = await api("/api/deck/brand/remove", { method: "POST" });
-      clearBrand();
-      brStatus(s);
-      if (deck) renderPage();
-    } catch (e) { brProgress("Could not remove brand icons: " + e.message); }
-    finally { brBusy = false; brButtons(); }
+      if (file.size > 32 * 1024 * 1024) throw new Error("the file is too big");
+      const json = JSON.parse(await file.text());
+      pkInstall($("dkPkPrefix").value.trim().toLowerCase() || String((json && json.prefix) || ""), json);
+    } catch (x) {
+      pkProgress("Not installed: " + (x instanceof SyntaxError ? "not a JSON file" : x.message));
+    }
   };
+
+  // Every icon name for the picker: MDI bare, packs with their prefix.
+  function iconNames(set) {
+    if (set === "mdi") return mdiNames;
+    if (!pkAll) {
+      pkAll = mdiNames.slice();
+      for (const p of packs.values()) for (const n of p.names) pkAll.push(p.prefix + ":" + n);
+    }
+    return set ? pkAll.filter((n) => n.startsWith(set + ":")) : pkAll;
+  }
 
   function renderIcons() {
     const t = pages()[cur].tiles[icFor];
     const q = $("dkIcQ").value.trim().toLowerCase().replace(/^mdi:/, "");
     const cur0 = (t.icon || "").replace(/^mdi:/, "");
-    const all = mdiNames.concat(cbiNames.map((n) => "phu:" + n));
+    const all = iconNames($("dkIcSet").value);
     const list = q ? all.filter((n) => n.toLowerCase().includes(q)) : all;
     const shown = list.slice(0, 240);
     $("dkIcInfo").textContent =
@@ -3206,7 +3583,7 @@
             '" data-n="' +
             esc(n) +
             '" title="' +
-            esc(n.startsWith("phu:") ? n : "mdi:" + n) +
+            esc(n.includes(":") ? n : "mdi:" + n) +
             '"><i>' +
             String.fromCodePoint(iconCp(n)) +
             "</i><small>" +
@@ -3216,7 +3593,7 @@
         .join("") || '<p class="dk-empty">Nothing matches.</p>';
     $("dkIcGrid")
       .querySelectorAll("[data-n]")
-      .forEach((b) => (b.onclick = () => setIcon(b.dataset.n.startsWith("phu:") ? b.dataset.n : "mdi:" + b.dataset.n)));
+      .forEach((b) => (b.onclick = () => setIcon(b.dataset.n.includes(":") ? b.dataset.n : "mdi:" + b.dataset.n)));
   }
   function setIcon(v) {
     const t = pages()[cur].tiles[icFor];
@@ -3227,17 +3604,23 @@
     renderPage();
   }
   function openIcons(i) {
-    if (!mdi && !cbi) {
+    if (!mdi && !packs.size) {
       alert("Install the icon font first (Icons card above).");
       return;
     }
     icFor = i;
     $("dkIcQ").value = "";
+    const sel = $("dkIcSet"), was = sel.value;
+    sel.innerHTML = '<option value="">All sets</option>' + (mdi ? '<option value="mdi">MDI</option>' : "") +
+      [...packs.values()].filter((p) => p.names.length)
+        .map((p) => '<option value="' + esc(p.prefix) + '">' + esc(p.prefix) + "</option>").join("");
+    sel.value = [...sel.options].some((o) => o.value === was) ? was : "";
     $("dkIcPick").classList.add("show");
     renderIcons();
     $("dkIcQ").focus();
   }
   $("dkIcQ").oninput = renderIcons;
+  $("dkIcSet").onchange = renderIcons;
   $("dkIcAuto").onclick = () => setIcon("");
   $("dkIcNone").onclick = () => setIcon("none");
   $("dkIcClose").onclick = () => $("dkIcPick").classList.remove("show");
@@ -3319,7 +3702,7 @@
     const host = document.getElementById("prnListHost");
     if (host) host.appendChild($("dkPrnCard"));
     icRefresh();
-    brRefresh();
+    pkRefresh();
     printersStatus();
     setInterval(() => {
       if (visible()) printersStatus();

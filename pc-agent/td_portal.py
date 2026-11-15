@@ -22,6 +22,7 @@ import os
 import re
 import secrets
 import socket
+import sys
 import threading
 import time
 import urllib.parse
@@ -372,8 +373,11 @@ class Portal:
         if port_in_use(self.port):
             return False
         import uvicorn
+        # Under pythonw (Windows, no console) there is no stdout/stderr and
+        # uvicorn's log setup fails; leave logging alone then.
+        quiet = {"log_config": None} if sys.stdout is None or sys.stderr is None else {}
         config = uvicorn.Config(create_app(self), host="127.0.0.1", port=self.port,
-                                log_level="warning", access_log=False, server_header=False)
+                                log_level="warning", access_log=False, server_header=False, **quiet)
         server = uvicorn.Server(config)
         threading.Thread(target=server.run, daemon=True, name="td_portal").start()
         self.write_session()

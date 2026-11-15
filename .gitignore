@@ -19,7 +19,7 @@ src/idf_component.yml.orig
 *.optional
 
 # Generado desde web/ por scripts/web_embed.py
-src/web_assets.h
+src/network/web_assets.h
 
 # Entorno de Python del agente del PC
 pc-agent/.venv/

@@ -40,7 +40,7 @@
  * - LV_STDLIB_RTTHREAD:    RT-Thread implementation
  * - LV_STDLIB_CUSTOM:      Implement the functions externally
  */
-#define LV_USE_STDLIB_MALLOC    LV_STDLIB_CUSTOM  /* src/deck_lv_mem.cpp: LVGL heap in PSRAM */
+#define LV_USE_STDLIB_MALLOC    LV_STDLIB_CUSTOM  /* src/core/deck_lv_mem.cpp: LVGL heap in PSRAM */
 
 /** Possible values
  * - LV_STDLIB_BUILTIN:     LVGL's built in implementation
@@ -653,7 +653,7 @@
 #define LV_FONT_MONTSERRAT_8  0
 #define LV_FONT_MONTSERRAT_10 0
 #define LV_FONT_MONTSERRAT_12 0
-#define LV_FONT_MONTSERRAT_14 0  /* deck_font_14 (src/deck_fonts) has Polish glyphs */
+#define LV_FONT_MONTSERRAT_14 0  /* deck_font_14 (src/ui/fonts) has Polish glyphs */
 #define LV_FONT_MONTSERRAT_16 0
 #define LV_FONT_MONTSERRAT_18 0
 #define LV_FONT_MONTSERRAT_20 0

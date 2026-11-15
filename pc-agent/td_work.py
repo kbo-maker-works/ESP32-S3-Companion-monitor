@@ -56,7 +56,7 @@ CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".touchdeck", "work.json")
 PUSH_EVERY_S = 60     # also when nothing changed, so the deck knows the data is current
 TIMEOUT_S = 20
 
-# Deck field sizes in bytes, terminator included (src/work_data.h).
+# Deck field sizes in bytes, terminator included (src/services/work_data.h).
 MAX_NAME, MAX_REF, MAX_INFO, MAX_TITLE, MAX_TEXT, MAX_KEY, MAX_LABEL, MAX_ERR = 19, 39, 15, 63, 15, 15, 11, 39
 MAX_MR_REF, MAX_CHIP, MAX_AGE = 31, 11, 5
 MAX_PIPELINES, MAX_MRS, MAX_SECTION_MRS, MAX_COLS, MAX_TICKETS, MAX_COL_TICKETS = 8, 16, 6, 6, 24, 5

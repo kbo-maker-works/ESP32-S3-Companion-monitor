@@ -6,7 +6,7 @@ Feeds the TouchDeck (Guition JC3248W535) from this PC over WiFi:
 
   * PC metrics for the metric tiles: CPU, RAM, NVIDIA GPU (nvidia-smi), disk,
     network. One UDP packet a second to the deck's port 4210 (V2.1 protocol,
-    see src/pc_metrics.h in the firmware).
+    see src/services/pc_metrics.h in the firmware).
   * Claude Code's state for the "Mascota Claude" widget: thinking, coding,
     waiting for you, turn done, failed, asleep. It comes from Claude Code hooks
     that run this same script as `touchdeck_agent.py hook` (see README.md).
@@ -117,6 +117,37 @@ def tool_failed(resp):
     return False
 
 
+TITLE_TAIL = 256 * 1024  # bytes read from the end of the transcript on each hook
+
+
+def session_title(transcript, whole=False):
+    """The name given to the session with /rename: the transcript's latest
+    "custom-title" entry (Claude Code writes it again every so often, so the
+    end of the file has it). None when what was read has none."""
+    if not transcript:
+        return None
+    try:
+        with open(transcript, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            start = 0 if whole else max(0, f.tell() - TITLE_TAIL)
+            f.seek(start)
+            lines = f.read().split(b"\n")
+    except OSError:
+        return None
+    if start:
+        lines = lines[1:]  # cut in the middle of a line
+    for line in reversed(lines):
+        if b'"custom-title"' not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and entry.get("type") == "custom-title":
+            return str(entry.get("customTitle") or "").strip()
+    return None
+
+
 def run_hook():
     try:
         payload = json.load(sys.stdin)
@@ -139,6 +170,16 @@ def run_hook():
 
     s = read_json(path) or {}
     s.update(project=project, t=now)
+    # The session's name when it has one (/rename), else its folder. The whole
+    # transcript is read once per session, when its end has no name yet.
+    transcript = payload.get("transcript_path") or ""
+    title = session_title(transcript)
+    if title is None and not s.get("title_scanned"):
+        title = session_title(transcript, whole=True) or ""
+        s["title_scanned"] = True
+    if title is not None:
+        s["title"] = title
+    name = s.get("title") or project
     if "start" not in s:
         s["start"] = now
     ev = None
@@ -167,8 +208,8 @@ def run_hook():
         s.update(mood="thinking", working=True)
         set_state("working", s.get("detail") or "Thinking...")
         if event == "PostToolUseFailure" or tool_failed(payload.get("tool_response")):
-            name = (payload.get("tool_name") or "Tool").replace("mcp__", "").split("__")[-1]
-            ev = ("fail", "%s failed!" % name, project)
+            tool = (payload.get("tool_name") or "Tool").replace("mcp__", "").split("__")[-1]
+            ev = ("fail", "%s failed!" % tool, name)
     elif event == "Notification":
         msg = (payload.get("message") or "").lower()
         kind = payload.get("notification_type") or ""
@@ -180,12 +221,12 @@ def run_hook():
             sub = "needs permission" if permission else "waiting for you"
             s.update(working=False)
             set_state("input", sub.capitalize())
-            ev = ("input", project, sub)
+            ev = ("input", name, sub)
     elif event in ("Stop", "SubagentStop"):
         if event == "Stop":
             s.update(mood="happy", status="", working=False)
             set_state("done")
-            ev = ("done", project, "turn done")
+            ev = ("done", name, "turn done")
     write_json_atomic(path, s)
     if ev:
         write_json_atomic(EVENT_FILE, {
@@ -250,9 +291,9 @@ def session_list(sessions, now):
         if code == "w" and now - t > STALE_WORKING_S:
             code = "z"
         detail = s.get("detail") or ""
-        rows.append([s.get("project") or "Claude Code", code, int(now - float(s.get("since") or t)),
+        rows.append([s.get("title") or s.get("project") or "Claude Code", code, int(now - float(s.get("since") or t)),
                      detail if code in ("w", "i") else "", float(s.get("start") or t), t])
-    # Same project twice: number them by start time ("desktop-companion 2").
+    # Same name twice: number them by start time ("desktop-companion 2").
     seen = {}
     for r in sorted(rows, key=lambda r: r[4]):
         seen[r[0]] = seen.get(r[0], 0) + 1

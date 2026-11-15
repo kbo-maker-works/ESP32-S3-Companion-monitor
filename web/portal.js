@@ -852,7 +852,7 @@
     }
   });
   $("sdFormat").addEventListener("click", async () => {
-    if (!confirm("Erase everything on the microSD card (pictures, brand icons) and create a new FAT file system?"))
+    if (!confirm("Erase everything on the microSD card (pictures, icon packs) and create a new FAT file system?"))
       return;
     try {
       $("sdFormat").disabled = true;
