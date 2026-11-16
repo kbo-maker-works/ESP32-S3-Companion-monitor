@@ -1328,7 +1328,7 @@ bool deckApplyConfig(const String& text, String& err) {
   // Tiles point into s_cfg: tear the pages down before replacing it.
   stopGestures();
   destroyPages(true);
-  s_cfg = next;
+  s_cfg = std::move(next);  // a copy duplicated every String of the deck in internal RAM
   buildPages();
   s_gen++;
   lv_obj_invalidate(lv_screen_active());

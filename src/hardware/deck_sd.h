@@ -16,7 +16,10 @@ template <typename T> struct WallAllocator {
   WallAllocator() = default;
   template <typename U> WallAllocator(const WallAllocator<U>&) {}
   T* allocate(size_t n) {
+    // PSRAM, else internal RAM (these are short file lists): with exceptions
+    // off a vector can't take a null, so abort only when both are out.
     void* p = heap_caps_malloc(n * sizeof(T), MALLOC_CAP_SPIRAM);
+    if (!p) p = heap_caps_malloc(n * sizeof(T), MALLOC_CAP_8BIT);
     if (!p) abort();
     return static_cast<T*>(p);
   }

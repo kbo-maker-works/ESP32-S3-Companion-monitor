@@ -18,9 +18,19 @@ struct Settings {
   uint8_t radarGnd = 0;     // radar filter: 0 airborne, 1 on the ground, 2 both
 };
 
+// Loop task only: the portal and the radar app change it, then call save().
 Settings& settings();
 void load();
 void save();
+
+// What the weather and flights tasks need, for other tasks: a copy taken
+// under a lock, published by load() and save(). Reading settings()' Strings
+// from a task while the portal reassigns them could read freed memory.
+struct Place {
+  float lat, lon;
+  uint8_t radarKm, radarGnd;
+};
+Place place();
 
 // Radar radius steps, in order (the radar's footer cycles through them).
 constexpr uint8_t RADAR_KMS[] = {10, 25, 50, 100};

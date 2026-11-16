@@ -338,6 +338,9 @@ void refreshGitlab(const WorkData& w) {
     }
     const WorkMr& m = w.mrs[i];
     lv_obj_set_parent(r.box, s->gl[m.sec].body);
+    // set_parent keeps a row where it was or appends it: moved last, in data
+    // order, a section lists its rows as the data does (newest first).
+    lv_obj_move_foreground(r.box);
     setChip(r.chip, m.chip, toneColor(m.tone));
     setText(r.title, m.title);
     setText(r.ref, m.ref);
@@ -368,6 +371,7 @@ void refreshGitlab(const WorkData& w) {
       continue;
     }
     lv_obj_set_parent(r.box, ps.body);
+    lv_obj_move_foreground(r.box);
     const WorkPipeline& p = w.pipelines[i];
     snprintf(b, sizeof(b), "%s · %s", p.name, p.ref);
     setText(r.ref, b);
@@ -408,6 +412,7 @@ void refreshJira(const WorkData& w) {
     }
     const WorkTicket& t = w.tickets[i];
     lv_obj_set_parent(r.box, s->jira[t.col].body);
+    lv_obj_move_foreground(r.box);
     setText(r.key, t.key);
     setText(r.title, t.title);
     setChip(r.status, t.status, toneColor(t.tone));

@@ -4,6 +4,7 @@
 #include "apps/app_work.h"
 #include "apps/app_radar.h"
 #include "ui/deck_ui_int.h"
+#include "services/pc_metrics.h"
 #include "config.h"
 #include <WiFi.h>
 
@@ -28,9 +29,9 @@ void openSoon(lv_obj_t* body, int, int) {
 
 // --- Ajustes: how to reach the portal, and the device at a glance -------------------
 struct InfoRow {
-  lv_obj_t* value;
+  lv_obj_t *name, *value;
 };
-InfoRow s_ip, s_net, s_mem, s_up;
+InfoRow s_ip, s_net, s_mem, s_up, s_pc;
 lv_obj_t* s_qr = nullptr;
 String s_qrUrl;
 uint32_t s_infoAt = 0;
@@ -45,11 +46,47 @@ InfoRow infoRow(lv_obj_t* col, const char* name) {
   lv_obj_remove_style_all(row);
   lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
   lv_obj_set_flex_flow(row, LV_FLEX_FLOW_COLUMN);
-  label(row, &deck_font_14, C_DIM, name);
+  lv_obj_remove_flag(row, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_t* n = label(row, &deck_font_14, C_DIM, name);
   lv_obj_t* v = label(row, &deck_font_20, C_TEXT, "");
   lv_label_set_long_mode(v, LV_LABEL_LONG_MODE_DOTS);
-  lv_obj_set_width(v, LV_PCT(100));
-  return {v};
+  lv_obj_set_size(v, LV_PCT(100), lineH(&deck_font_20));  // one line, "..." when long
+  return {n, v};
+}
+
+// The PC whose agent can open pages: the first one online that takes commands
+// (paired; its agent sends a command port), else the first one online.
+const PcSource* agentPc(bool& ready) {
+  ready = false;
+  const PcSource* online = nullptr;
+  for (int i = 0; pcSources && i < MAX_PCS; i++) {
+    const PcSource& p = pcSources[i];
+    if (!p.used || !p.data.online) continue;
+    if (p.cmdPort) {
+      ready = true;
+      return &p;
+    }
+    if (!online) online = &p;
+  }
+  return online;
+}
+
+// A tap on PORTAL or PC AGENT: that PC opens the page in its browser.
+void openOnPc(lv_event_t* e) {
+  bool ready;
+  const PcSource* pc = agentPc(ready);
+  String err;
+  if (!pc) err = "No PC agent online";
+  else if (!ready) err = "Pair the PC first (touchdeck_agent.py pair)";
+  else pcSendCommand(pc->id, (const char*)lv_event_get_user_data(e), err);
+  if (err.length()) deckToastShow(err.c_str(), 2200);
+}
+
+void tappable(InfoRow& r, const char* cmd) {
+  lv_obj_t* row = lv_obj_get_parent(r.value);
+  lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_opa(row, LV_OPA_60, LV_STATE_PRESSED);
+  lv_obj_add_event_cb(row, openOnPc, LV_EVENT_SHORT_CLICKED, (void*)cmd);
 }
 
 void infoRefresh() {
@@ -66,6 +103,13 @@ void infoRefresh() {
   lv_label_set_text_fmt(s_mem.value, "%u KB internal  ·  %u KB PSRAM",
                         (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
                         (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+  bool ready;
+  const PcSource* pc = agentPc(ready);
+  if (!pc) lv_label_set_text(s_pc.value, "None online");
+  else lv_label_set_text_fmt(s_pc.value, "%s%s", pc->name, ready ? "" : "  ·  not paired");
+  // ">": a tap opens it on that PC
+  lv_label_set_text(s_ip.name, ready ? "PORTAL  >" : "PORTAL");
+  lv_label_set_text(s_pc.name, ready ? "PC AGENT  >" : "PC AGENT");
   const uint32_t s = millis() / 1000;
   if (s >= 86400) lv_label_set_text_fmt(s_up.value, "%ud %uh %um", (unsigned)(s / 86400), (unsigned)(s / 3600 % 24), (unsigned)(s / 60 % 60));
   else lv_label_set_text_fmt(s_up.value, "%uh %um %us", (unsigned)(s / 3600), (unsigned)(s / 60 % 60), (unsigned)(s % 60));
@@ -98,11 +142,14 @@ void openInfo(lv_obj_t* body, int w, int h) {
   lv_obj_set_pos(col, x, pad);
   lv_obj_set_size(col, w - x - pad, h - 2 * pad);
   lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_style_pad_row(col, 10, 0);
+  lv_obj_set_style_pad_row(col, 6, 0);
   s_ip = infoRow(col, "PORTAL");
+  s_pc = infoRow(col, "PC AGENT");
   s_net = infoRow(col, "NETWORK");
   s_mem = infoRow(col, "FREE MEMORY");
   s_up = infoRow(col, "UPTIME");
+  tappable(s_ip, "open_deck");
+  tappable(s_pc, "open_agent");
   lv_obj_t* fw = label(col, &deck_font_14, C_DIM, "Firmware " FW_VERSION);
   lv_obj_set_style_margin_top(fw, 4, 0);
   infoRefresh();

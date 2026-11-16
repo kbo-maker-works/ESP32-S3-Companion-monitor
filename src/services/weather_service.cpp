@@ -18,9 +18,12 @@ TaskHandle_t s_task = nullptr;
 volatile uint32_t s_due = 0;
 
 bool fetch() {
-  const companion::Settings& cs = companion::settings();
-  const String url = "http://api.open-meteo.com/v1/forecast?latitude=" + cs.lat + "&longitude=" + cs.lon +
-                     "&current=temperature_2m,relative_humidity_2m,weather_code,is_day";
+  const companion::Place at = companion::place();
+  char url[160];
+  snprintf(url, sizeof(url),
+           "http://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
+           "&current=temperature_2m,relative_humidity_2m,weather_code,is_day",
+           at.lat, at.lon);
   HTTPClient http;
   http.useHTTP10(true);
   http.setTimeout(10000);
@@ -75,7 +78,8 @@ void run(void*) {
 
 void begin() {
   if (s_task) return;
-  xTaskCreatePinnedToCore(run, "weather", 6144, nullptr, 1, &s_task, 0);
+  // Stack in PSRAM: plain HTTP and a parse, no flash or NVS writes.
+  xTaskCreatePinnedToCoreWithCaps(run, "weather", 6144, nullptr, 1, &s_task, 0, MALLOC_CAP_SPIRAM);
 }
 
 void refreshSoon() { s_due = 0; }

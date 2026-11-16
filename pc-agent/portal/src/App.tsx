@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, toForm, type Form, type SourceName, type State, type TestName, type TestResult } from "./api";
 import { LogsPage } from "./components/LogsPage";
 import { deckView, Overview, sourceView } from "./components/Overview";
@@ -39,7 +39,11 @@ export default function App() {
 
   const dirty = !!form && JSON.stringify(form) !== baseline;
 
+  // The forms come from the first state that arrives, even if that is a poll
+  // after a failed first load (the agent was still starting).
+  const loaded = useRef(false);
   const adopt = useCallback((s: State) => {
+    loaded.current = true;
     const f = toForm(s);
     setState(s);
     setForm(f);
@@ -50,7 +54,11 @@ export default function App() {
     api.state().then(adopt, (e: Error) => setOffline(e.message));
     const t = setInterval(() => {
       api.state().then(
-        (s) => (setState(s), setOffline("")),
+        (s) => {
+          if (loaded.current) setState(s);
+          else adopt(s);
+          setOffline("");
+        },
         (e: Error) => setOffline(e.message),
       );
     }, 4000);
@@ -159,7 +167,7 @@ export default function App() {
         {!state && !offline && <p className="muted"><span className="spinner" /> Loading…</p>}
 
         {state && form && page === "overview" && (
-          <Overview state={state} go={go} onAwake={(awake) => setState({ ...state, awake })} />
+          <Overview state={state} go={go} onAwake={(awake) => setState((s) => s && { ...s, awake })} />
         )}
         {state && form && page === "gitlab" && (
           <GitLabPage state={state} form={form.gitlab} set={(gitlab) => setForm({ ...form, gitlab })}

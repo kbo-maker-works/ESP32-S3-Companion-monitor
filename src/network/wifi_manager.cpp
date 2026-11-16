@@ -290,7 +290,9 @@ void handleWiFi() {
 
     // Periodically probe STA to recover without user interaction
     unsigned long now = millis();
-    if (!staProbing && now - lastStaProbe >= WIFI_STA_PROBE_INTERVAL) {
+    // Not while someone is on the setup AP: the probe's scan moves the AP's
+    // channel and drops a phone in the middle of the form.
+    if (!staProbing && now - lastStaProbe >= WIFI_STA_PROBE_INTERVAL && WiFi.softAPgetStationNum() == 0) {
       // Start a non-blocking STA probe; result checked after WIFI_STA_PROBE_CHECK_MS
       Serial.println("AP mode: probing STA connection...");
       WiFi.begin(wifiSSID, wifiPass);

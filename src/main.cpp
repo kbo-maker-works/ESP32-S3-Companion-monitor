@@ -6,6 +6,7 @@
 #include <esp_task_wdt.h>
 #include <esp_heap_caps.h>
 #include "config.h"
+#include "core/tls_psram.h"
 #include "ui/display_ui.h"
 #include "settings.h"
 #include "network/wifi_manager.h"
@@ -41,6 +42,10 @@ void setup() {
   crashLogBegin();
   // The core keeps mallocs up to 4 KB internal; 128 B doubles free internal RAM.
   heap_caps_malloc_extmem_enable(128);
+  // mbedTLS (this build: CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC) in PSRAM for every TLS
+  // client from boot: before, the radar's HTTPS took ~35 KB of internal RAM per
+  // fetch until a printer or the daily download had installed it.
+  tlsPsramInstall();
 
   loadSettings();
   companion::load();

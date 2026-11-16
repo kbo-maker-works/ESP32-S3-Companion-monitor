@@ -835,6 +835,20 @@ input[type="range"]::-webkit-slider-thumb {
   font: 10px var(--mono);
   color: var(--dim);
 }
+.wifi-scan {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.chip.net {
+  cursor: pointer;
+}
+.chip.net.on {
+  border-color: var(--accent);
+  color: var(--ink);
+}
 .chip-empty {
   font: 12px var(--mono);
   color: var(--dim);

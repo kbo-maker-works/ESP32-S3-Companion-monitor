@@ -99,8 +99,8 @@ void setState(State st, int code = 0) {
 }
 
 void fetch() {
-  const companion::Settings& cfg = companion::settings();
-  const float lat0 = cfg.lat.toFloat(), lon0 = cfg.lon.toFloat();
+  const companion::Place cfg = companion::place();  // a copy: the portal may change the settings meanwhile
+  const float lat0 = cfg.lat, lon0 = cfg.lon;
   const int km = cfg.radarKm;
   const int nm = (int)ceilf(km / 1.852f);
   char url[112];
@@ -154,7 +154,8 @@ void fetch() {
 
   // Every plane in the radius, then the ALL nearest are kept (the response is
   // not sorted by distance). The filter applies in snapshot().
-  static Plane* tmp = (Plane*)ps_malloc(sizeof(Plane) * SCAN);
+  static Plane* tmp = nullptr;  // retried each fetch: one failed allocation must not break the radar till reboot
+  if (!tmp) tmp = (Plane*)ps_malloc(sizeof(Plane) * SCAN);
   if (!tmp) {
     setState(State::Error, -4);
     return;
@@ -232,7 +233,9 @@ void run(void*) {
 void begin() {
   if (s_task) return;
   s_mux = xSemaphoreCreateMutex();
-  xTaskCreatePinnedToCore(run, "flights", 12288, nullptr, 1, &s_task, 0);
+  // Stack in PSRAM: it idles until the radar opens, and only fetches and parses
+  // (no flash or NVS writes, which need an internal stack). TLS runs fine on one.
+  xTaskCreatePinnedToCoreWithCaps(run, "flights", 12288, nullptr, 1, &s_task, 0, MALLOC_CAP_SPIRAM);
 }
 
 void setActive(bool on) {

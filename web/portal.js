@@ -27,6 +27,63 @@
     const m = Math.floor((s % 3600) / 60);
     return (d ? d + "d " : "") + h + "h " + m + "m";
   }
+  // WiFi: list the networks around (the deck scans for a few seconds) and
+  // fill the name with a tap: typing it by hand on a phone was the hard part.
+  function bars(rssi) {
+    return rssi >= -55 ? "▂▄▆█" : rssi >= -67 ? "▂▄▆" : rssi >= -78 ? "▂▄" : "▂";
+  }
+  function showNets(nets) {
+    const tray = $("wifiNets"),
+      cur = $("wifiSsid").value;
+    tray.hidden = false;
+    tray.innerHTML = nets.length
+      ? nets
+          .map(
+            (n) =>
+              '<button type="button" class="chip net' +
+              (n.ssid === cur ? " on" : "") +
+              '" data-ssid="' +
+              esc(n.ssid) +
+              '"><b>' +
+              esc(n.ssid) +
+              "</b><small>" +
+              bars(n.rssi) +
+              (n.secure ? " 🔒" : "") +
+              "</small></button>",
+          )
+          .join("")
+      : '<span class="chip-empty">No networks found</span>';
+    qa(".chip.net", tray).forEach((b) =>
+      b.addEventListener("click", () => {
+        const f = $("wifiSsid");
+        f.value = b.dataset.ssid;
+        f.dispatchEvent(new Event("input", { bubbles: true }));  // the save bar sees it
+        qa(".chip.net", tray).forEach((x) => x.classList.toggle("on", x === b));
+        $("wifiPass").focus();
+      }),
+    );
+  }
+  async function scanWifi() {
+    const btn = $("wifiScan"),
+      note = $("wifiScanNote");
+    btn.disabled = true;
+    note.textContent = "Searching…";
+    try {
+      let r = await getJson("/api/wifi/scan?start=1", { cache: "no-store" });
+      for (let i = 0; i < 20 && r.scanning; i++) {
+        await new Promise((ok) => setTimeout(ok, 1000));
+        r = await getJson("/api/wifi/scan", { cache: "no-store" });
+      }
+      showNets(r.networks || []);
+      note.textContent = r.scanning ? "Still searching: try again." : "Tap a network, then type its password.";
+    } catch (e) {
+      note.textContent = "Search failed: " + e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  if ($("wifiScan")) $("wifiScan").addEventListener("click", scanWifi);
+
   function showToast(message, error) {
     const t = $("toast");
     t.textContent = message;

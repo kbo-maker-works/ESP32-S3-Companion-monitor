@@ -175,17 +175,26 @@ bool bakeGlass(Page& p) {
   const lv_image_dsc_t* blur = wallBlur();
   if (!sharp || !blur || !p.root || !p.grid) return false;
   const int w = sharp->header.w, h = sharp->header.h;
-  if (!p.glass) p.glass = lv_draw_buf_create(w, h, LV_COLOR_FORMAT_RGB565, 0);
-  if (!p.glass) return false;
-  lv_image_cache_drop(p.glass);
-  for (int y = 0; y < h; y++)
-    memcpy(p.glass->data + y * p.glass->header.stride, sharp->data + y * sharp->header.stride, w * 2);
   // The glass is drawn in ARGB8888 over nothing, then laid over the picture
   // and dithered to RGB565 once: blending in RGB565 left coloured bands.
   // In bands: a screen sized ARGB8888 buffer needs 614 KB in one piece.
+  // Both buffers first: short of memory, the page keeps the plain picture
+  // instead of a half-made glass (or no background at all).
   constexpr int BAND = 80;
   lv_draw_buf_t* top = lv_draw_buf_create(w, BAND, LV_COLOR_FORMAT_ARGB8888, 0);
-  if (!top) return false;
+  if (top && !p.glass) p.glass = lv_draw_buf_create(w, h, LV_COLOR_FORMAT_RGB565, 0);
+  if (!top || !p.glass) {
+    if (top) lv_draw_buf_destroy(top);
+    lv_obj_set_style_bg_image_src(p.root, sharp, 0);  // off the glass before it goes
+    if (p.glass) lv_draw_buf_destroy(p.glass);
+    p.glass = nullptr;
+    lv_obj_invalidate(p.root);
+    p.stale = true;
+    return false;
+  }
+  lv_image_cache_drop(p.glass);
+  for (int y = 0; y < h; y++)
+    memcpy(p.glass->data + y * p.glass->header.stride, sharp->data + y * sharp->header.stride, w * 2);
   std::vector<uint32_t> key = glassKey(p);
   lv_obj_t* cv = lv_canvas_create(p.root);
   lv_obj_add_flag(cv, LV_OBJ_FLAG_HIDDEN);

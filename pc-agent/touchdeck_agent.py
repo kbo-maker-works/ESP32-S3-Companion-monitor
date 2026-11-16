@@ -41,7 +41,7 @@ import zlib
 
 DECK_PORT = 4210
 SEND_EVERY_S = 1.0
-PACKET_MAX = 1900   # the deck's buffer is 2048 (PC_PACKET_BUF_SIZE)
+PACKET_MAX = 1400   # the deck's WiFiUDP reads 1460 bytes at most; under it, no IP fragments either
 RESOLVE_EVERY_S = 60.0
 
 STATE_DIR = os.path.join(os.path.expanduser("~"), ".claude", "touchdeck")
@@ -238,6 +238,16 @@ def run_hook():
 # ---------------------------------------------------------------------------
 # Claude state for the mascot, merged from every session's file
 # ---------------------------------------------------------------------------
+STALE_FILE_S = 24 * 3600  # a session or usage file untouched this long is left over
+
+
+def remove_quietly(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 def claude_state(now):
     sessions = []
     try:
@@ -246,9 +256,17 @@ def claude_state(now):
         names = []
     for name in names:
         if name.endswith(".json"):
-            s = read_json(os.path.join(SESSIONS_DIR, name))
-            if isinstance(s, dict) and now - float(s.get("t", 0)) < 24 * 3600:
+            path = os.path.join(SESSIONS_DIR, name)
+            s = read_json(path)
+            try:
+                t = float(s.get("t") or 0) if isinstance(s, dict) else 0.0
+            except (TypeError, ValueError):
+                t = 0.0
+            if now - t < STALE_FILE_S:
+                s["t"] = t
                 sessions.append(s)
+            else:  # a session that crashed or was killed never ran SessionEnd
+                remove_quietly(path)
 
     latest = max(sessions, key=lambda s: s.get("t", 0)) if sessions else None
     working = [s for s in sessions if s.get("working") and now - s.get("t", 0) < SESSION_IDLE_S]
@@ -347,12 +365,20 @@ def usage_state(now):
                 out[key] = -1  # this account has none yet: not the previous account's
     files = []
     try:
-        for name in os.listdir(USAGE_DIR):
-            if name.endswith(".json") and name not in ("limits.json", "account.json"):
-                path = os.path.join(USAGE_DIR, name)
-                files.append((os.path.getmtime(path), path))
+        names = os.listdir(USAGE_DIR)
     except OSError:
         return {}
+    for name in names:
+        if name.endswith(".json") and name not in ("limits.json", "account.json"):
+            path = os.path.join(USAGE_DIR, name)
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:  # its session just ended
+                continue
+            if now - mtime > STALE_FILE_S:  # left by a session that never ended cleanly
+                remove_quietly(path)
+            else:
+                files.append((mtime, path))
     files.sort(reverse=True)
     ctx_done = False
     for mtime, path in files:
@@ -483,20 +509,33 @@ def pc_identity():
     return pc_id, clip(name, 23)
 
 
+BROADCAST = "255.255.255.255"
+
+
 class Target:
-    """The deck's address: resolved by name now and then; broadcast if that fails."""
+    """The deck's address, resolved by name now and then (from several threads).
+    A failed lookup keeps the last good address and is retried RESOLVE_EVERY_S
+    later, not on every call: an mDNS miss can block for seconds. Never resolved
+    yet: BROADCAST (the main loop then sends only what anyone may see)."""
 
     def __init__(self, host):
-        self.host, self.addr, self.when = host, None, 0.0
+        self.host, self.addr, self.when = host, None, -RESOLVE_EVERY_S
+        self.lock = threading.Lock()
 
     def get(self):
-        if time.monotonic() - self.when > RESOLVE_EVERY_S or not self.addr:
+        with self.lock:
+            every = RESOLVE_EVERY_S if self.addr else 10.0  # not found yet (booting, network down): sooner
+            if time.monotonic() - self.when < every:
+                return self.addr or BROADCAST
             self.when = time.monotonic()
-            try:
-                self.addr = socket.gethostbyname(self.host)
-            except OSError:
-                self.addr = None
-        return self.addr or "255.255.255.255"
+        try:
+            addr = socket.gethostbyname(self.host)
+        except OSError:
+            addr = None
+        with self.lock:
+            if addr:
+                self.addr = addr
+            return self.addr or BROADCAST
 
 
 class PcSide:
@@ -506,7 +545,8 @@ class PcSide:
     awake: td_awake.Awake, whose state goes in pcstate for the deck's tile.
     batteries: td_batteries.Batteries, this PC's and its accessories' ("batt")."""
 
-    def __init__(self, pc_id, handlers=None, awake=None, batteries=None):
+    def __init__(self, pc_id, handlers=None, awake=None, batteries=None, deck=None):
+        self.deck = deck  # () -> the deck's address (Target.get), for the cover server
         self.media = self.volume = self.commands = self.keyring = None
         self.awake = awake
         self.batteries = batteries
@@ -524,7 +564,7 @@ class PcSide:
                 print("volume off: %s" % e, flush=True)
             try:
                 self.media = td_pc.Media()
-                td_pc.start_art_server(self.media)
+                td_pc.start_art_server(self.media, self._from_deck)
             except Exception as e:
                 print("media off: %s" % e, flush=True)
                 self.media = None
@@ -534,7 +574,7 @@ class PcSide:
                 py = td_media_mac.apple_python()
                 if py:
                     self.media = td_media_mac.MacMedia(py)
-                    td_pc.start_art_server(self.media)
+                    td_pc.start_art_server(self.media, self._from_deck)
                 else:
                     print("media off: needs Apple's Command Line Tools (xcode-select --install)", flush=True)
             except Exception as e:
@@ -546,6 +586,11 @@ class PcSide:
             self.commands = td_pc.Commands(pc_id, self.media, self.volume, self.keyring, handlers)
         except OSError as e:
             print("commands off: %s" % e, flush=True)
+
+    def _from_deck(self, ip):
+        # The cover goes to the deck only; while its name doesn't resolve, to anyone.
+        addr = self.deck() if self.deck else BROADCAST
+        return addr == BROADCAST or ip == addr
 
     def fill(self, pkt):
         state = {}
@@ -619,10 +664,29 @@ def start_portal(port, worker, host, target, pc_name, awake=None):
         portal = td_portal.Portal(worker, host, target.get, pc_name, port, awake=awake)
         if portal.serve():
             print("settings: %s" % portal.url, flush=True)
-        else:
-            print("settings off: port %d is taken (another agent running?)" % port, flush=True)
+            return portal
+        print("settings off: port %d is taken (another agent running?)" % port, flush=True)
     except Exception as e:
         print("settings off: %s" % e, flush=True)
+    return None
+
+
+def opener(url):
+    """A deck command that opens one fixed page in this PC's browser (the deck's
+    Settings app): url() gives it, None = not available. Never a URL from the deck."""
+    def run(rest):
+        if rest:
+            return False, "unknown command"
+        u = url()
+        if not u:
+            return False, "not available"
+        try:
+            import td_work
+            td_work.open_url(u)
+        except Exception as e:
+            return False, clip(str(e), 60)
+        return True, ""
+    return run
 
 
 def build_packet(metrics, pc_id, pc_name, pc=None):
@@ -640,16 +704,40 @@ def build_packet(metrics, pc_id, pc_name, pc=None):
         pkt["claude"] = claude_state(now)
     if pc:
         pc.fill(pkt)
-    # The deck drops packets over 2048 bytes: shed the session list's details,
-    # then its rows, before that happens.
-    ss = (pkt.get("claude") or {}).get("ss") or []
-    while ss and len(json.dumps(pkt, separators=(",", ":")).encode()) > PACKET_MAX:
-        if any(r[3] for r in ss):
+    # Over PACKET_MAX the deck gets a cut packet and drops it: shed, least
+    # useful first, until it fits.
+    claude, state = pkt.get("claude") or {}, pkt.get("pcstate") or {}
+    ss = claude.get("ss") or []
+    media = state.get("media") or {}
+
+    def shed():
+        if any(r[3] for r in ss):  # the session list's details
             for r in ss:
                 r[3] = ""
-        else:
+        elif ss:                   # then its rows
             ss.pop()
+        elif len((media.get("title") or "").encode()) > 60 or len((media.get("artist") or "").encode()) > 60:
+            for k in ("title", "artist"):
+                if k in media:
+                    media[k] = clip(media[k], 60)
+        elif state.get("batt"):
+            state["batt"].pop()
+        elif claude.get("acct") or claude.get("org"):
+            claude["acct"] = claude["org"] = ""
+        elif "pcstate" in pkt:
+            del pkt["pcstate"]
+        else:
+            return False
+        return True
+
+    while len(packet_bytes(pkt)) > PACKET_MAX and shed():
+        pass
     return pkt
+
+
+def packet_bytes(pkt):
+    # Raw UTF-8: the default \uXXXX escapes would double a title in CJK.
+    return json.dumps(pkt, separators=(",", ":"), ensure_ascii=False).encode()
 
 
 def main():
@@ -700,7 +788,7 @@ def main():
     print("TouchDeck agent: %s -> %s:%d" % (pc_name, args.host, DECK_PORT), flush=True)
     worker = start_work(target, pc_id, pc_name, args.verbose)
     awake = start_awake()
-    start_portal(args.portal_port, worker, args.host, target, pc_name, awake)
+    portal = start_portal(args.portal_port, worker, args.host, target, pc_name, awake)
     # Taps on the deck's Work rows open their MR / ticket / pipeline here; a
     # Keep awake tile toggles it.
     handlers = {}
@@ -708,22 +796,30 @@ def main():
         handlers["open:"] = worker.open_link
     if awake:
         handlers["awake_toggle"] = awake.command
-    pc = PcSide(pc_id, handlers or None, awake, start_batteries(pc_name))
+    # The deck's Settings app: this agent's settings page, the deck's own portal.
+    handlers["open_agent"] = opener(lambda: portal.url if portal else None)
+    handlers["open_deck"] = opener(
+        lambda: "http://%s/" % (target.get() if target.get() != BROADCAST else args.host))
+    pc = PcSide(pc_id, handlers or None, awake, start_batteries(pc_name), target.get)
     failing = None  # the last send error, logged once (the service's log stays small)
     while True:
         t0 = time.monotonic()
         try:
-            data = json.dumps(build_packet(metrics, pc_id, pc_name, pc), separators=(",", ":")).encode()
             addr = target.get()
+            pkt = build_packet(metrics, pc_id, pc_name, pc)
+            if addr == BROADCAST:  # the whole LAN hears it: only the PC's name and metrics
+                pkt = {k: v for k, v in pkt.items() if k in ("pc_id", "pc_name", "timestamp", "status", "metrics")}
+            data = packet_bytes(pkt)
             sock.sendto(data, (addr, DECK_PORT))
             if failing:
                 print("%s send OK again -> %s" % (time.strftime("%H:%M:%S"), addr), flush=True)
                 failing = None
             if args.verbose:
                 print("%s %d B -> %s" % (time.strftime("%H:%M:%S"), len(data), addr), flush=True)
-        except OSError as e:
+        except Exception as e:  # a bad session file or a sensor glitch must not end the agent
             if str(e) != failing:
-                print("%s send failed: %s (logged once until it changes)" % (time.strftime("%H:%M:%S"), e), flush=True)
+                what = "send failed" if isinstance(e, OSError) else "packet failed (%s)" % type(e).__name__
+                print("%s %s: %s (logged once until it changes)" % (time.strftime("%H:%M:%S"), what, e), flush=True)
                 failing = str(e)
         time.sleep(max(0.0, SEND_EVERY_S - (time.monotonic() - t0)))
 

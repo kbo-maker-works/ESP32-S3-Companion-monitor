@@ -232,9 +232,15 @@ class Volume:
 # ---------------------------------------------------------------------------
 # Cover server
 # ---------------------------------------------------------------------------
-def start_art_server(media):
+def start_art_server(media, allowed=None):
+    """allowed(ip) -> bool: who may fetch the cover (the deck), None = anyone."""
     class Handler(BaseHTTPRequestHandler):
+        timeout = 5  # a slow client must not hold a thread for ever
+
         def do_GET(self):
+            if allowed and not allowed(self.client_address[0]):
+                self.send_error(403)
+                return
             u = urlparse(self.path)
             q = parse_qs(u.query)
             data = None
@@ -314,22 +320,28 @@ class Commands:
         return fresh
 
     def _serve(self):
+        refused_at = 0.0
         while True:
             try:
                 data, addr = self.sock.recvfrom(2048)
                 msg = json.loads(data.decode("utf-8"))
-            except (OSError, ValueError):
-                continue
-            nonce, cmd = str(msg.get("nonce", "")), str(msg.get("cmd", ""))
-            ok, text = self._check(msg, nonce, cmd)
-            if ok:
-                ok, text = self._run(cmd)
-            print("command %s from %s: %s %s" % (cmd, addr[0], "ok" if ok else "refused", text), flush=True)
-            try:
+                if not isinstance(msg, dict):  # "1", "[]", "null" from anyone on the LAN
+                    continue
+                nonce, cmd = str(msg.get("nonce", "")), str(msg.get("cmd", ""))
+                ok, text = self._check(msg, nonce, cmd)
+                if ok:
+                    ok, text = self._run(cmd)
+                # Refusals at most every 30 s: junk on the port must not grow the log.
+                if ok or time.monotonic() - refused_at >= 30:
+                    if not ok:
+                        refused_at = time.monotonic()
+                    print("command %s from %s: %s %s" % (cmd[:40], addr[0], "ok" if ok else "refused", text), flush=True)
                 ack = json.dumps({"ack": nonce, "ok": ok, "msg": text}).encode()
                 self.sock.sendto(ack, (addr[0], DECK_PORT))
-            except OSError:
-                pass
+            except (OSError, ValueError):
+                continue
+            except Exception as e:  # never let one packet end deck control
+                print("commands: %s" % e, flush=True)
 
     def _check(self, msg, nonce, cmd):
         key = self.keyring.get()
@@ -338,12 +350,15 @@ class Commands:
         if msg.get("pc") != self.pc_id:
             return False, "wrong PC"
         with self.lock:
-            issued = self.nonces.pop(nonce, None)
-        if issued is None:
+            known = nonce in self.nonces
+        if not known:
             return False, "stale nonce"
         want = hmac.new(key, ("%s|%s|%s" % (self.pc_id, nonce, cmd)).encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(want, str(msg.get("sig", "")).lower()):
-            return False, "bad signature"
+            return False, "bad signature"  # the nonce stays: junk can't burn the deck's nonces
+        with self.lock:
+            if self.nonces.pop(nonce, None) is None:  # used meanwhile
+                return False, "stale nonce"
         return True, ""
 
     def _run(self, cmd):

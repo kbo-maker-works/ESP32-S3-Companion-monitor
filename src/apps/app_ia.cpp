@@ -21,7 +21,7 @@ struct Meter {
 };
 Meter s_m5, s_m7;
 lv_obj_t* s_empty = nullptr;
-lv_obj_t *s_acct = nullptr, *s_org = nullptr;  // the logged-in account, over the meters
+lv_obj_t* s_acct = nullptr;  // the logged-in account, over the meters
 uint32_t s_shownVer = 0, s_tickAt = 0;
 
 // Open Claude Code sessions: a coloured dot (red waits for you, green turn
@@ -66,7 +66,7 @@ Meter meter(lv_obj_t* col, const char* name) {
   lv_obj_remove_style_all(box);
   lv_obj_set_size(box, LV_PCT(100), LV_SIZE_CONTENT);
   lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_style_pad_row(box, 3, 0);
+  lv_obj_set_style_pad_row(box, 1, 0);
 
   lv_obj_t* head = lv_obj_create(box);
   lv_obj_remove_style_all(head);
@@ -78,7 +78,7 @@ Meter meter(lv_obj_t* col, const char* name) {
   lv_obj_align(lv_obj_get_child(head, 0), LV_ALIGN_LEFT_MID, 0, 0);
 
   m.bar = lv_bar_create(box);
-  lv_obj_set_size(m.bar, LV_PCT(100), 6);
+  lv_obj_set_size(m.bar, LV_PCT(100), 5);
   lv_bar_set_range(m.bar, 0, 1000);
   lv_obj_set_style_bg_color(m.bar, lv_color_hex(C_TRACK), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(m.bar, LV_OPA_COVER, LV_PART_MAIN);
@@ -181,7 +181,13 @@ void refreshSessions(bool have) {
   for (int i = 0; i < CLAUDE_MAX_SESSIONS; i++) {
     SessionRow& r = s_rows[i];
     showObj(r.box, i < n);
-    if (i >= n) continue;
+    if (i >= n) {
+      if (r.state) {  // hidden: stop its pulse; the next session in this row starts fresh
+        lv_anim_delete(r.dot, dotOpa);
+        r.state = 0;
+      }
+      continue;
+    }
     const ClaudeSession& s = c.sessions[i];
     if (s.state != r.state) {
       r.state = s.state;
@@ -219,12 +225,9 @@ void refresh() {
   if (have) lv_obj_add_flag(s_empty, LV_OBJ_FLAG_HIDDEN);
   else lv_obj_remove_flag(s_empty, LV_OBJ_FLAG_HIDDEN);
 
-  lv_label_set_text(s_acct, u.acct[0] ? u.acct : "");
-  lv_label_set_text(s_org, u.org);
-  if (u.acct[0]) lv_obj_remove_flag(lv_obj_get_parent(s_acct), LV_OBJ_FLAG_HIDDEN);
-  else lv_obj_add_flag(lv_obj_get_parent(s_acct), LV_OBJ_FLAG_HIDDEN);
-  if (u.org[0]) lv_obj_remove_flag(s_org, LV_OBJ_FLAG_HIDDEN);
-  else lv_obj_add_flag(s_org, LV_OBJ_FLAG_HIDDEN);
+  setText(s_acct, u.acct);
+  if (u.acct[0]) lv_obj_remove_flag(s_acct, LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_add_flag(s_acct, LV_OBJ_FLAG_HIDDEN);
 
   char buf[64];
   setMeter(s_m5, have ? u.q5 : -1);
@@ -254,18 +257,13 @@ void open(lv_obj_t* body, int w, int h) {
   if (wide) lv_obj_set_size(col, (w - 32 - 18) / 2, LV_PCT(100));
   else lv_obj_set_size(col, LV_PCT(100), LV_SIZE_CONTENT);
   lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_style_pad_row(col, 8, 0);
+  lv_obj_set_style_pad_row(col, 5, 0);
   // Whose quotas these are: several accounts can take turns on one computer.
-  lv_obj_t* who = lv_obj_create(col);
-  lv_obj_remove_style_all(who);
-  lv_obj_set_size(who, LV_PCT(100), LV_SIZE_CONTENT);
-  lv_obj_set_flex_flow(who, LV_FLEX_FLOW_COLUMN);
-  s_acct = label(who, &deck_font_14, C_TEXT, "");
-  s_org = label(who, &deck_font_12, C_DIM, "");
-  for (lv_obj_t* l : {s_acct, s_org}) {
-    lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_DOTS);
-    lv_obj_set_width(l, LV_PCT(100));
-  }
+  // The logged-in account: one small line, "..." when long (the organization
+  // took a second line the mascot wants).
+  s_acct = label(col, &deck_font_12, C_TEXT, "");
+  lv_label_set_long_mode(s_acct, LV_LABEL_LONG_MODE_DOTS);
+  lv_obj_set_size(s_acct, LV_PCT(100), lineH(&deck_font_12));
   s_m5 = meter(col, "SESSION · 5 HOURS");
   s_m7 = meter(col, "WEEK · 7 DAYS");
 
@@ -323,7 +321,7 @@ void close() {
   s_mState = nullptr;
   s_mBox = nullptr;
   s_empty = s_sessCount = s_sessNone = nullptr;  // the card deletes the objects (and the pulses)
-  s_acct = s_org = nullptr;
+  s_acct = nullptr;
   for (SessionRow& r : s_rows) r = {};
 }
 

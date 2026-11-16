@@ -75,7 +75,7 @@ def _url(form, label):
     if not url:
         return ""
     p = urllib.parse.urlsplit(url)
-    if p.scheme not in ("https", "http") or not p.netloc:
+    if p.scheme != "https" or not p.netloc:  # the token goes with every request
         raise BadInput("%s: the URL must start with https://" % label)
     return url
 
@@ -310,8 +310,11 @@ def create_app(portal):
 
     @app.get("/{rest:path}", include_in_schema=False)
     def page(rest: str):
-        if rest and os.path.isfile(os.path.join(DIST, rest)) and ".." not in rest:
-            return FileResponse(os.path.join(DIST, rest))
+        # Only files under dist/: os.path.join drops DIST for an absolute `rest` ("//etc/hosts").
+        root = os.path.realpath(DIST)
+        path = os.path.realpath(os.path.join(root, rest)) if rest else ""
+        if path.startswith(root + os.sep) and os.path.isfile(path):
+            return FileResponse(path)
         try:
             with open(index, encoding="utf-8") as f:
                 html = f.read()

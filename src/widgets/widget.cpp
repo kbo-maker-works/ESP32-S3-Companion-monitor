@@ -28,6 +28,19 @@ void show(lv_obj_t* o, bool on) {
   else lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
 }
 
+// FNV-1a over what a widget shows: update() reports a change (which re-snaps
+// an off-screen page, ~45 ms) only when this moves, not on every PC packet.
+struct Fnv {
+  uint32_t v = 2166136261u;
+  void add(uint32_t x) {
+    for (int i = 0; i < 4; i++, x >>= 8) v = (v ^ (x & 0xFF)) * 16777619u;
+  }
+  void add(const char* t) {
+    for (; t && *t; t++) v = (v ^ (uint8_t)*t) * 16777619u;
+    v = (v ^ 0xFF) * 16777619u;  // ends the string: "ab"+"c" differs from "a"+"bc"
+  }
+};
+
 // --- Tiempo -----------------------------------------------------------------
 // compacto: icon and temperature. detalle: plus condition, humidity and city,
 // dropped one by one when the tile is too small for them.
@@ -75,8 +88,10 @@ bool weatherUpdate(void* p) {
   const int big = s->w >= 120 && s->h >= 70;
   const lv_font_t* tempFont = big ? &deck_font_28 : &deck_font_20;
   lv_obj_set_style_text_font(s->temp, tempFont, 0);
-  int iconPx = s->detail ? (s->h >= 110 ? 40 : 28) : std::min(s->h * 45 / 100, 56);
-  if (iconPx < 20) iconPx = 20;
+  // Sizes the deck already draws: every other size takes one of the icon
+  // font's 8 slots for good, and once they run out icons vanish deck-wide.
+  const int want = s->detail ? (s->h >= 110 ? 40 : 28) : s->h * 45 / 100;
+  const int iconPx = want >= 40 ? 40 : want >= 28 ? 28 : 20;
   const uint32_t cp = d.ok && icons ? iconCodepoint(weather::mdiIcon(d)) : 0;
   const lv_font_t* f = cp ? iconFont(iconPx, cp) : nullptr;
   show(s->icon, f != nullptr);
@@ -169,6 +184,8 @@ struct State {
   uint32_t failSeq = 0;    // the failure it last shook at
   uint32_t shookAt = 0;    // and when
   bool angry = false;      // red, fists up (F_ANGRY)
+  bool dotted = false;      // the bubble shows thinking dots (". .. ...")
+  uint32_t sayKey = 0;     // the bubble's last text and style (the label's own text may end in "...")
 };
 
 // What it says when a tool fails: comic swearing, a new one every 450 ms.
@@ -244,8 +261,12 @@ bool say(State* s, const char* text, bool curse) {
     return shown;
   }
   const lv_font_t* f = curse ? &deck_font_14 : &deck_font_12;
-  const bool sameFont = lv_obj_get_style_text_font(s->say, LV_PART_MAIN) == f;
-  if (shown && sameFont && !strcmp(lv_label_get_text(s->say), text)) return false;
+  Fnv k;
+  k.add(text);
+  k.add(curse);
+  k.add((uint32_t)s->sayMaxW);
+  if (shown && k.v == s->sayKey) return false;
+  s->sayKey = k.v;
   const int maxW = std::max(20, s->sayMaxW);
   const int tw = textW(text, f) + 1;
   lv_obj_set_style_text_font(s->say, f, 0);
@@ -510,12 +531,15 @@ bool update(void* p) {
     }
   }
 
-  bool changed = say(s, line, failing);
+  // The legs and the thinking dots are animation, not content: on screen LVGL
+  // redraws them anyway; an off-screen page's snapshot need not follow them.
+  const bool dotted = line == dots;
+  bool changed = say(s, line, failing) && !(dotted && s->dotted);
+  s->dotted = dotted;
   if (now - s->lastFrame >= kFrameMs) {
     s->lastFrame = now;
     s->frame ^= 1;
     drawLegs(s);
-    changed = true;
   }
   // FNV-1a over everything drawn below
   uint32_t key = 2166136261u;
@@ -560,8 +584,14 @@ void resize(void* p, int w, int h) {
 }
 
 // The robot's animations only touch the robot, and LVGL ends them when the
-// tile (and so the robot) is deleted.
-void destroy(void* p) { delete (State*)p; }
+// tile (and so the robot) is deleted. Its draw-size callback holds the State:
+// gone first, so a robot that outlives it never reads freed memory.
+void destroy(void* p) {
+  State* s = (State*)p;
+  if (!s) return;
+  lv_obj_remove_event_cb_with_user_data(s->robot, nullptr, s);
+  delete s;
+}
 
 // --- Tap reactions --------------------------------------------------------------
 void moveY(void* o, int32_t v) { lv_obj_set_style_translate_y((lv_obj_t*)o, v, 0); }
@@ -723,6 +753,7 @@ struct State {
   lv_obj_t *name, *pct, *bar, *sub;  // single meter
   Row rows[3];                       // "todo"
   uint32_t key = UINT32_MAX;
+  uint32_t shown = 0;                // Fnv of what is on screen
   int w = 0, h = 0;
 };
 
@@ -798,6 +829,19 @@ bool update(void* p) {
   s->key = key;
   const ClaudeUsage& u = pcClaude().usage;
 
+  // Only touch the labels (and report a change) when what they show moves.
+  char buf[40] = "";
+  Fnv f;
+  f.add((uint32_t)s->w);
+  f.add((uint32_t)s->h);
+  for (int i = 0; i < 3; i++) f.add((uint32_t)lroundf(claudefmt::pct(u, online, (Kind)i) * 10));
+  if (!s->all) {
+    claudefmt::detail(buf, sizeof(buf), u, s->kind);
+    f.add(buf);
+  }
+  if (f.v == s->shown) return false;
+  s->shown = f.v;
+
   if (s->all) {
     const int rowH = s->h / 3;
     for (int i = 0; i < 3; i++) {
@@ -812,8 +856,6 @@ bool update(void* p) {
   lv_obj_set_style_text_font(s->pct, s->h >= 80 && s->w >= 90 ? &deck_font_28 : &deck_font_20, 0);
   show(s->name, s->h >= 50);
   setBar(s->bar, s->pct, pct);
-  char buf[40];
-  claudefmt::detail(buf, sizeof(buf), u, s->kind);
   show(s->sub, s->h >= 90 && pct >= 0 && buf[0]);
   lv_label_set_text(s->sub, buf);
   return true;
@@ -1049,6 +1091,7 @@ struct State {
   Item items[MAX];
   int n = -1;                  // items laid out (-1 = not yet)
   uint32_t key = UINT32_MAX;
+  uint32_t shown = 0;          // Fnv of what is on screen
   int w = 0, h = 0;
   bool relayout = true;
 };
@@ -1324,6 +1367,20 @@ bool update(void* p) {
   const PcSource* pc = pick(s);
   Entry e[MAX];
   const int n = fitting(s, entries(s, pc, e));
+  // Same picture as last time: nothing to set, nothing to report.
+  Fnv f;
+  f.add((uint32_t)n);
+  f.add(pc ? pc->name : "");
+  f.add(pc && pc->data.online);
+  f.add(iconsReady());
+  for (int i = 0; i < n; i++) {
+    f.add(e[i].name);
+    f.add(e[i].icon);
+    f.add(isnan(e[i].v) ? 0xFFFFFFFFu : (uint32_t)lroundf(e[i].v));
+    f.add(e[i].charging);
+  }
+  if (f.v == s->shown && !s->relayout) return false;
+  s->shown = f.v;
   if (s->relayout || n != s->n) {
     s->n = n;
     s->relayout = false;

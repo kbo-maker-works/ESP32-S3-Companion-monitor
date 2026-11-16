@@ -72,11 +72,16 @@ class _Mac:
 
     def jiggle(self):
         cg, cf = self.cg, self.cf
+        # CFRelease(NULL) crashes the whole process, past any Python try.
         e = cg.CGEventCreate(None)
+        if not e:
+            return
         at = cg.CGEventGetLocation(e)
         cf.CFRelease(e)
         for p in (_Point(at.x + 1, at.y), at):
             m = cg.CGEventCreateMouseEvent(None, 5, p, 0)  # kCGEventMouseMoved
+            if not m:
+                return
             cg.CGEventPost(0, m)  # kCGHIDEventTap: counts as input, as a real mouse would
             cf.CFRelease(m)
 

@@ -35,6 +35,7 @@
 #include <Update.h>
 #include <esp_task_wdt.h>
 #include <esp_heap_caps.h>
+#include <esp_memory_utils.h>
 #include "esp_ota_ops.h"
 #include <WiFi.h>
 #include <time.h>
@@ -1345,6 +1346,39 @@ static void handleSaveNetwork() {
   scheduleRestart(1500);
 }
 
+// GET /api/wifi/scan[?start=1] -> {"scanning", "networks": [{"ssid", "rssi", "secure"}]}
+// The setup page's network list. start=1 begins a new scan in the background
+// (a few seconds); later calls return it, strongest first, one entry per name.
+static void handleWifiScan() {
+  int16_t n = WiFi.scanComplete();  // WIFI_SCAN_RUNNING (-1), WIFI_SCAN_FAILED (-2) or a count
+  if (server.arg("start") == "1" && n != WIFI_SCAN_RUNNING) {
+    WiFi.scanDelete();
+    n = WiFi.scanNetworks(true) == WIFI_SCAN_FAILED ? WIFI_SCAN_FAILED : WIFI_SCAN_RUNNING;
+  }
+  JsonDocument doc(psramJson());
+  doc["scanning"] = n == WIFI_SCAN_RUNNING;
+  JsonArray nets = doc["networks"].to<JsonArray>();
+  if (n > 0) {
+    std::vector<int16_t> order;  // strongest first, hidden networks left out
+    for (int16_t i = 0; i < n; i++)
+      if (WiFi.SSID(i).length()) order.push_back(i);
+    std::sort(order.begin(), order.end(), [](int16_t a, int16_t b) { return WiFi.RSSI(a) > WiFi.RSSI(b); });
+    for (int16_t i : order) {
+      const String ssid = WiFi.SSID(i);
+      bool seen = false;  // several access points, one network
+      for (JsonObject o : nets) seen = seen || ssid == (const char*)o["ssid"];
+      if (seen || nets.size() >= 25) continue;
+      JsonObject o = nets.add<JsonObject>();
+      o["ssid"] = ssid;
+      o["rssi"] = WiFi.RSSI(i);
+      o["secure"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+    }
+  }
+  String out;
+  serializeJson(doc, out);
+  server.send(200, "application/json", out);
+}
+
 static void handleSaveWifiLegacy() {
   String ssid = server.arg("ssid");
   ssid.trim();
@@ -1388,6 +1422,51 @@ static const char* screenName(ScreenState s) {
     case SCREEN_OTA_UPDATE:      return "ota";
     default:                     return "deck";
   }
+}
+
+// GET /api/mem - heaps and task stacks, to measure RAM work on the device:
+// internal (WiFi, DMA, stacks), DMA-capable and PSRAM, each with its free
+// bytes, largest free block and lowest free since boot; then every task's
+// lowest free stack (bytes) and whether its stack is in PSRAM.
+static void handleApiMem() {
+  JsonDocument doc(psramJson());
+  auto heap = [&](const char* key, uint32_t caps) {
+    multi_heap_info_t i;
+    heap_caps_get_info(&i, caps);
+    JsonObject o = doc[key].to<JsonObject>();
+    o["free"] = i.total_free_bytes;
+    o["largest"] = i.largest_free_block;
+    o["min_free"] = i.minimum_free_bytes;
+    o["blocks"] = i.allocated_blocks;
+  };
+  heap("internal", MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  heap("dma", MALLOC_CAP_DMA);
+  heap("psram", MALLOC_CAP_SPIRAM);
+  doc["uptime_s"] = millis() / 1000;
+  UBaseType_t n = uxTaskGetNumberOfTasks();
+  TaskStatus_t* t = (TaskStatus_t*)heap_caps_malloc(n * sizeof(TaskStatus_t), MALLOC_CAP_SPIRAM);
+  if (t) {
+    n = uxTaskGetSystemState(t, n, nullptr);
+    JsonArray a = doc["tasks"].to<JsonArray>();
+    for (UBaseType_t i = 0; i < n; i++) {
+      JsonObject o = a.add<JsonObject>();
+      o["name"] = t[i].pcTaskName;
+      o["stack_free_min"] = t[i].usStackHighWaterMark;  // bytes on ESP-IDF
+      o["psram"] = esp_ptr_external_ram(t[i].pxStackBase);
+      o["prio"] = t[i].uxCurrentPriority;
+    }
+    heap_caps_free(t);
+  }
+  const size_t len = measureJson(doc);
+  char* out = (char*)heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM);
+  if (!out || doc.overflowed()) {
+    heap_caps_free(out);
+    sendJsonMessage(503, false, "No PSRAM for the memory report");
+    return;
+  }
+  serializeJson(doc, out, len + 1);
+  streamAsset(out, len, "application/json", "no-store");
+  heap_caps_free(out);
 }
 
 static void handleApiStatus() {
@@ -1607,11 +1686,14 @@ static void handleIconsFont() {
 }
 
 // POST /api/deck/icons (multipart "font") - store, then load on finish.
+static bool iconSeen = false;  // this request carried a file part
+
 static void handleIconsUpload() {
   if (!multipartRequest()) return;
   HTTPUpload& up = server.upload();
   if (up.status == UPLOAD_FILE_START) {
     iconError = "";
+    iconSeen = true;
     if (!deck::deckFsReady()) {
       iconError = "file system not available";
       return;
@@ -1638,6 +1720,14 @@ static void handleIconsUpload() {
 }
 
 static void handleIconsFinish() {
+  // No file in this request (not multipart, or no part): never install a
+  // leftover upload from an earlier, failed one.
+  if (!iconSeen) {
+    LittleFS.remove(ICONS_UPLOAD);
+    sendJsonMessage(400, false, "No font file in the request");
+    return;
+  }
+  iconSeen = false;
   String err = iconError;
   if (!err.length() && !deckInstallIcons(ICONS_UPLOAD, err) && !err.length()) err = "install failed";
   if (iconError.length()) LittleFS.remove(ICONS_UPLOAD);
@@ -2463,6 +2553,7 @@ void initWebServer() {
   server.on("/portal-layout.css", HTTP_GET, handlePortalLayoutCss);
   server.on("/portal.js", HTTP_GET, handlePortalJs);
   server.on("/save/wifi", HTTP_POST, handleSaveWifiLegacy);
+  server.on("/api/wifi/scan", HTTP_GET, handleWifiScan);
   server.on("/save/display", HTTP_POST, handleSaveDisplay);
   server.on("/save/sd", HTTP_POST, handleSaveSd);
   server.on("/api/sd/format", HTTP_POST, handleSdFormat);
@@ -2485,6 +2576,7 @@ void initWebServer() {
   server.on("/api/config/export", HTTP_GET, handleConfigExport);
   server.on("/api/config/import", HTTP_POST, handleConfigImport);
   server.on("/api/factory-reset", HTTP_POST, handleFactoryReset);  server.on("/api/status", HTTP_GET, handleApiStatus);
+  server.on("/api/mem", HTTP_GET, handleApiMem);
   // /screen.bmp is what the StatNode Companion's preview fetches.
   server.on("/screen.bmp", HTTP_GET, handleLiveScreenshot);
   server.on("/screen_live.bmp", HTTP_GET, handleLiveScreenshot);

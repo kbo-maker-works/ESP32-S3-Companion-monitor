@@ -115,6 +115,25 @@ def open_url(url):
         subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+class _KeepTokensHome(urllib.request.HTTPRedirectHandler):
+    """urllib copies every header to a redirect's target, the token too: to
+    another host, or from https to http. There the tokens stay behind."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is None:
+            return None
+        a, b = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+        if (a.scheme, a.netloc.lower()) != (b.scheme, b.netloc.lower()):
+            for h in list(new.headers):
+                if h.lower() in ("authorization", "private-token"):
+                    del new.headers[h]
+        return new
+
+
+_OPENER = urllib.request.build_opener(_KeepTokensHome)
+
+
 class Api:
     def __init__(self, base, headers):
         self.base, self.headers = base.rstrip("/"), headers
@@ -126,7 +145,7 @@ class Api:
         if data is not None:
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(url, data=data, headers=headers, method="POST" if data else "GET")
-        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
+        with _OPENER.open(req, timeout=TIMEOUT_S) as r:
             return json.loads(r.read().decode() or "null"), r.headers
 
 
@@ -425,11 +444,23 @@ class Jira:
 # Polling and pushing
 # ---------------------------------------------------------------------------
 def load_config(path=CONFIG_FILE):
+    """The settings, None when missing or unreadable: a broken file must not
+    take the settings page (which can write a good one) down with it."""
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            cfg = json.load(f)
+        return cfg if isinstance(cfg, dict) else None
     except FileNotFoundError:
         return None
+    except (OSError, ValueError) as e:
+        global _load_error
+        if str(e) != _load_error:  # the settings page reads it every few seconds
+            print("work: can't read %s: %s" % (path, e), flush=True)
+            _load_error = str(e)
+        return None
+
+
+_load_error = None
 
 
 def save_config(cfg, path=CONFIG_FILE):
@@ -519,31 +550,42 @@ class Worker(threading.Thread):
         self.wake.set()
 
     def run(self):
+        failing = None
         while True:
-            with self.lock:
-                todo = [(n, s) for n, s in self.sources.items() if time.monotonic() >= self.due[n]]
-                for name, src in todo:
-                    self.due[name] = time.monotonic() + src.every
-            for name, src in todo:
-                try:
-                    data, err = src.poll(), None
-                except Exception as e:  # keep the last data, say what failed
-                    data, err = None, e
-                    if self.verbose:
-                        print("work: %s: %s" % (name, e), flush=True)
-                with self.lock:
-                    if self.sources.get(name) is not src:  # reconfigured meanwhile
-                        continue
-                    if err is None:
-                        new = data.pop("_links", {})
-                        self.links[name] = (new, self.links.get(name, ({}, {}))[0])  # a tap may race a poll
-                        self.state[name] = data
-                        self.polled[name] = time.time()
-                    else:
-                        self.state[name] = dict(self.state[name], err=http_error(err))
-            self.push()
+            try:
+                self._tick()
+            except Exception as e:  # one bad poll or push must not stop the Work updates for good
+                if str(e) != failing:
+                    print("work: %s (logged once until it changes)" % e, flush=True)
+                    failing = str(e)
+            else:
+                failing = None
             self.wake.wait(5)
             self.wake.clear()
+
+    def _tick(self):
+        with self.lock:
+            todo = [(n, s) for n, s in self.sources.items() if time.monotonic() >= self.due[n]]
+            for name, src in todo:
+                self.due[name] = time.monotonic() + src.every
+        for name, src in todo:
+            try:
+                data, err = src.poll(), None
+            except Exception as e:  # keep the last data, say what failed
+                data, err = None, e
+                if self.verbose:
+                    print("work: %s: %s" % (name, e), flush=True)
+            with self.lock:
+                if self.sources.get(name) is not src:  # reconfigured meanwhile
+                    continue
+                if err is None:
+                    new = data.pop("_links", {})
+                    self.links[name] = (new, self.links.get(name, ({}, {}))[0])  # a tap may race a poll
+                    self.state[name] = data
+                    self.polled[name] = time.time()
+                else:
+                    self.state[name] = dict(self.state[name], err=http_error(err))
+        self.push()
 
     def open_link(self, lid):
         """The deck's "open:<id>": opens that MR / pipeline / ticket page here."""
@@ -578,6 +620,8 @@ class Worker(threading.Thread):
         if body == self.pushed and time.monotonic() - self.pushed_at < PUSH_EVERY_S:
             return
         addr = self.deck_addr()
+        if addr == "255.255.255.255":  # the deck's name doesn't resolve yet: nowhere to push
+            return
         ok = push(addr, body, self.verbose)
         with self.lock:
             self.last_push = {"ok": ok, "at": time.time(), "addr": addr}

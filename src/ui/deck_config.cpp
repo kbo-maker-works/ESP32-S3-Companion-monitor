@@ -239,7 +239,7 @@ bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err)
       return false;
     }
     if (!d.name.length()) d.name = d.id;
-    cfg.printers.push_back(d);
+    cfg.printers.push_back(std::move(d));
   }
   JsonArrayConst pages = doc["pages"].as<JsonArrayConst>();
   if (pages.isNull() || pages.size() == 0) {
@@ -250,6 +250,7 @@ bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err)
     if (err) *err = "too many pages (max " + String(MAX_DECK_PAGES) + ")";
     return false;
   }
+  cfg.pages.reserve(pages.size());
   for (JsonVariantConst pv : pages) {
     PageDef p;
     p.id = (const char*)(pv["id"] | "");
@@ -273,6 +274,9 @@ bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err)
       if (err) *err = "page '" + p.id + "': too many tiles";
       return false;
     }
+    // Sized once and moved in: Arduino String's move isn't noexcept, so a
+    // growing vector deep-copied every TileDef (~30 small Strings, internal RAM).
+    p.tiles.reserve(tiles.size());
     for (JsonVariantConst tv : tiles) {
       TileDef t;
       t.id = (const char*)(tv["id"] | "");
@@ -324,7 +328,7 @@ bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err)
         const char* st = tv["style"] | "number";
         t.style = !strcmp(st, "chart") ? METRIC_CHART : !strcmp(st, "bar") ? METRIC_BAR : METRIC_NUMBER;
         t.scaleMax = (uint16_t)constrain((int)(tv["scaleMax"] | 0), 0, 65535);
-        p.tiles.push_back(t);
+        p.tiles.push_back(std::move(t));
         continue;  // read-only: no tap or hold actions
       }
       if (t.type == TILE_SENSOR) {
@@ -368,7 +372,7 @@ bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err)
       }
       if (t.type == TILE_CLOCK || t.type == TILE_MEDIA) {
         if (t.type == TILE_MEDIA) t.pc = (const char*)(tv["pc"] | "");
-        p.tiles.push_back(t);
+        p.tiles.push_back(std::move(t));
         continue;
       }
       if (t.type == TILE_PRINTER) {
@@ -388,7 +392,7 @@ bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err)
         t.show = (PrinterShow)k;
         t.nozzle = !strcmp(tv["nozzle"] | "right", "left") ? 1 : 0;
         t.amsUnit = constrain(tv["unit"] | 1, 1, PRN_AMS_UNITS);
-        p.tiles.push_back(t);
+        p.tiles.push_back(std::move(t));
         continue;  // built-in taps: light toggles, summary opens the printer page
       }
       if (t.type == TILE_WIDGET) {
@@ -430,15 +434,15 @@ bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err)
         t.tap.cmd = "volume_mute";
       }
       if (tv["hold"].isNull() && t.type == TILE_ACTION) t.hold.kind = ACT_DETAIL;
-      p.tiles.push_back(t);
+      p.tiles.push_back(std::move(t));
     }
-    cfg.pages.push_back(p);
+    cfg.pages.push_back(std::move(p));
   }
   if (cfg.pages.empty()) {
     if (err) *err = "no pages";
     return false;
   }
-  out = cfg;
+  out = std::move(cfg);
   return true;
 }
 
@@ -519,7 +523,7 @@ bool deckConfigStore(const String& text, DeckConfig& out, String& err) {
     err = "cannot replace the file";
     return false;
   }
-  out = cfg;
+  out = std::move(cfg);
   return true;
 }
 
