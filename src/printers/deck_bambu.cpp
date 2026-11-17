@@ -33,6 +33,19 @@ struct Lock {
   ~Lock() { xSemaphoreGive(mutex()); }
 };
 
+// A cloud printer as the PC agents push it (PSRAM, from its first push while powered).
+constexpr uint32_t AGENT_STALE_MS = 150000;   // agents push at least once a minute
+constexpr uint32_t AGENT_SWITCH_MS = 90000;   // another PC takes a printer over after this
+struct AgentSide {
+  PrinterState state;
+  HmsBaseline hmsBase;
+  bool printErrorSeen = false;
+  bool stale = false;      // AGENT_STALE_MS passed; printersVersion() flagged it once
+  uint32_t rxMs = 0;       // millis() of the last push taken
+  int32_t age = -1;        // the report's age then, s (-1: no report yet)
+  char pcId[17] = "";      // as PcSource::id
+};
+
 struct Slot {
   PrinterConn conn;
   bool powered = false;
@@ -41,8 +54,18 @@ struct Slot {
   PrinterLink link = PRN_OFF;
   char err[48] = "";
   int8_t light = -1;
+  AgentSide* agent = nullptr;     // cloud printers only
 };
 Slot s_slots[PRN_MAX];
+
+// Printers the agents pushed lately, for the portal's picker.
+struct Announced {
+  char serial[24] = "", name[32] = "", model[24] = "", pc[24] = "";
+  uint32_t ms = 0;
+};
+constexpr int ANNOUNCED_MAX = 4;
+constexpr uint32_t ANNOUNCED_MS = 600000;
+Announced s_announced[ANNOUNCED_MAX];
 TaskHandle_t s_task = nullptr;
 bool s_hold = false;  // printersHold: sessions closed, worker stopped
 uint32_t s_version = 1, s_generation = 0;
@@ -677,7 +700,7 @@ void task(void*) {
       {
         Lock lock;
         const Slot& slot = s_slots[i];
-        powered = slot.powered && !s_hold;
+        powered = slot.powered && !s_hold && !slot.conn.cloud;  // cloud printers have no session here
         generation = slot.generation;
         if (powered && (!sessions[i] || sessions[i]->generation != generation)) conn = slot.conn;
       }
@@ -717,7 +740,8 @@ void task(void*) {
     bool quit = true;
     {
       Lock lock;
-      for (int i = 0; i < PRN_MAX; ++i) if ((s_slots[i].powered && !s_hold) || sessions[i]) quit = false;
+      for (int i = 0; i < PRN_MAX; ++i)
+        if ((s_slots[i].powered && !s_hold && !s_slots[i].conn.cloud) || sessions[i]) quit = false;
       if (quit) s_task = nullptr;
     }
     if (quit) break;
@@ -738,7 +762,143 @@ void invalidate(Slot& slot) {
   slot.light = -1;
   slot.link = slot.powered ? PRN_CONNECTING : PRN_OFF;
   slot.err[0] = 0;
+  if (slot.agent) {
+    slot.agent->~AgentSide();
+    heap_caps_free(slot.agent);
+    slot.agent = nullptr;
+  }
   ++s_version;
+}
+
+// --- Cloud printers: state pushed by a PC agent ------------------------------
+float agentNumber(JsonVariantConst v) { return v.is<float>() ? v.as<float>() : NAN; }
+
+// [present, rgb, alpha, type, remain]
+void agentTray(JsonArrayConst t, PrinterTray& out) {
+  out = PrinterTray{};
+  if (t.isNull()) return;
+  out.present = (t[0] | 0) != 0;
+  out.rgb = (t[1] | 0UL) & 0xFFFFFF;
+  out.alpha = constrain(t[2] | 255, 0, 255);
+  strlcpy(out.type, t[3] | "", sizeof(out.type));
+  out.remain = constrain(t[4] | -1, -1, 100);
+}
+
+void announce(JsonObjectConst o, const char* pcName) {
+  const char* serial = o["serial"] | "";
+  Announced* a = nullptr;
+  for (auto& x : s_announced) if (!strcmp(x.serial, serial)) a = &x;
+  if (!a) {
+    a = &s_announced[0];
+    for (auto& x : s_announced) if (x.ms == 0 || (int32_t)(x.ms - a->ms) < 0) a = &x;
+  }
+  strlcpy(a->serial, serial, sizeof(a->serial));
+  strlcpy(a->name, o["name"] | serial, sizeof(a->name));
+  strlcpy(a->model, o["model"] | "", sizeof(a->model));
+  strlcpy(a->pc, pcName, sizeof(a->pc));
+  a->ms = millis() | 1;
+}
+
+// Caller holds the lock.
+void applyAgent(Slot& slot, JsonObjectConst o, const char* pcId, const char* pcName) {
+  const char* lk = o["link"] | "";
+  const PrinterLink link = !strcmp(lk, "online") ? PRN_ONLINE : !strcmp(lk, "connecting") ? PRN_CONNECTING : PRN_FAILED;
+  const int32_t age = o["age"] | -1;
+  const uint32_t now = millis();
+  AgentSide* a = slot.agent;
+  if (a && strcmp(a->pcId, pcId) && now - a->rxMs < AGENT_SWITCH_MS) {
+    // Another PC shows this printer: take it over only with fresher news.
+    const int32_t held = a->age < 0 ? -1 : a->age + (int32_t)((now - a->rxMs) / 1000);
+    const bool fresher = link == PRN_ONLINE &&
+                         (a->state.link != PRN_ONLINE || (age >= 0 && held >= 0 && age + 5 < held));
+    if (!fresher) return;
+  }
+  if (!a) {
+    void* mem = heap_caps_malloc(sizeof(AgentSide), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!mem) return;
+    a = slot.agent = new (mem) AgentSide();
+  }
+  PrinterState& s = a->state;
+  s.viaPc = true;
+  strlcpy(s.pcName, pcName, sizeof(s.pcName));
+  s.link = link;
+  strlcpy(s.err, o["err"] | "", sizeof(s.err));
+  a->rxMs = now;
+  a->age = age;
+  a->stale = false;
+  strlcpy(a->pcId, pcId, sizeof(a->pcId));
+  ++s_version;
+  if (o["st"].isNull()) return;  // no report yet: only the link
+
+  char before[sizeof(s.gcodeState)];
+  strlcpy(before, s.gcodeState, sizeof(before));
+  strlcpy(s.gcodeState, o["st"] | "", sizeof(s.gcodeState));
+  strlcpy(s.job, o["job"] | "", sizeof(s.job));
+  s.progress = constrain(o["pct"] | 0, 0, 100);
+  s.remainingMin = constrain(o["left"] | 0, 0, 65535);
+  s.layer = constrain(o["layer"] | 0, 0, 65535);
+  s.totalLayers = constrain(o["layers"] | 0, 0, 65535);
+  s.speedLevel = constrain(o["spd"] | 0, 0, 4);
+  s.stage = constrain(o["stg"] | -1, -1, 254);
+  s.dualNozzle = (o["dual"] | 0) != 0;
+  s.activeNozzle = (o["an"] | 0) == 1 ? 1 : 0;
+  JsonArrayConst noz = o["noz"];
+  for (int i = 0; i < 2; ++i) {
+    s.nozzle[i] = agentNumber(noz[i][0]);
+    s.nozzleTarget[i] = agentNumber(noz[i][1]);
+  }
+  s.bed = agentNumber(o["bed"][0]);
+  s.bedTarget = agentNumber(o["bed"][1]);
+  s.chamber = agentNumber(o["ch"]);
+  s.door = constrain(o["door"] | -1, -1, 1);
+  s.light = constrain(o["light"] | -1, -1, 1);
+
+  s.amsCount = 0;
+  for (JsonObjectConst u : o["ams"].as<JsonArrayConst>()) {
+    if (s.amsCount >= PRN_AMS_UNITS) break;
+    PrinterAmsUnit& unit = s.ams[s.amsCount++];
+    unit = PrinterAmsUnit{};
+    unit.present = true;
+    unit.id = constrain(u["id"] | 0, 0, 253);
+    unit.slots = constrain(u["n"] | 4, 1, PRN_AMS_SLOTS);
+    unit.humidity = constrain(u["h"] | 255, 0, 255);
+    unit.temp = agentNumber(u["t"]);
+    unit.dryRemainMin = constrain(u["dry"] | 0, 0, 65535);
+    int k = 0;
+    for (JsonArrayConst t : u["tr"].as<JsonArrayConst>()) {
+      if (k >= unit.slots) break;
+      agentTray(t, unit.tray[k++]);
+    }
+  }
+  for (int i = s.amsCount; i < PRN_AMS_UNITS; ++i) s.ams[i] = PrinterAmsUnit{};
+  const int au = o["au"] | 255, as = o["as"] | 255;
+  s.activeUnit = (au >= 0 && au < s.amsCount) || au == 254 ? au : 255;
+  s.activeSlot = s.activeUnit < s.amsCount && as >= 0 && as < s.ams[s.activeUnit].slots ? as : 255;
+  agentTray(o["ext"], s.ext);
+  s.extPresent = s.ext.present;
+  s.mapCount = 0;
+  for (JsonVariantConst v : o["map"].as<JsonArrayConst>())
+    if (s.mapCount < PRN_MAP_MAX && v.is<uint32_t>() && v.as<uint32_t>() < 65535) s.map[s.mapCount++] = v.as<uint32_t>();
+
+  if (o["perr"].is<uint32_t>()) {
+    const uint32_t pe = o["perr"].as<uint32_t>();
+    if (pe != s.printError) s.printErrorFresh = a->printErrorSeen && pe;
+    s.printError = pe;
+    s.printErrorKnown = true;
+    a->printErrorSeen = true;
+  }
+  printerCancelTrack(s, before);
+  if (o["hms"].is<JsonArrayConst>()) {
+    uint64_t keys[32];
+    size_t n = 0;
+    for (JsonArrayConst e : o["hms"].as<JsonArrayConst>())
+      if (n < 32 && e[0].is<uint32_t>() && e[1].is<uint32_t>()) keys[n++] = hmsKey(e[0].as<uint32_t>(), e[1].as<uint32_t>());
+    HmsContext ctx;
+    ctx.doorShown = s.door >= 0;
+    hmsReport(s, a->hmsBase, keys, n, ctx);
+    s.hmsKnown = true;
+  }
+  s.lastReportMs = (age >= 0 ? now - (uint32_t)age * 1000 : now) | 1;
 }
 
 void wake() { if (s_task) xTaskNotifyGive(s_task); }
@@ -773,7 +933,8 @@ void printersSet(const std::vector<PrinterConn>& list) {
     if (index < 0) continue;
     keep[index] = true;
     Slot& slot = s_slots[index];
-    if (slot.conn.ip != conn.ip || slot.conn.serial != conn.serial || slot.conn.code != conn.code) {
+    if (slot.conn.ip != conn.ip || slot.conn.serial != conn.serial || slot.conn.code != conn.code ||
+        slot.conn.cloud != conn.cloud) {
       slot.conn = conn;
       invalidate(slot);
     }
@@ -802,7 +963,7 @@ void printerPower(const String& id, bool on) {
   for (auto& slot : s_slots) {
     if (!id.length() || slot.conn.id != id) continue;
     if (slot.powered != on) { slot.powered = on; invalidate(slot); }
-    if (on && !s_hold && !startWorker()) {
+    if (on && !s_hold && !slot.conn.cloud && !startWorker()) {
       slot.link = PRN_FAILED;
       strlcpy(slot.err, "Cannot start printer worker", sizeof(slot.err));
       ++s_version;
@@ -828,13 +989,13 @@ void printersHold(bool hold) {
   if (s_hold == hold) return;
   s_hold = hold;
   for (auto& slot : s_slots) {
-    if (!slot.powered) continue;
+    if (!slot.powered || slot.conn.cloud) continue;  // a cloud printer holds no session
     invalidate(slot);
     if (hold) strlcpy(slot.err, "Paused for the wallpaper download", sizeof(slot.err));
   }
   if (!hold) {
     for (const auto& slot : s_slots)
-      if (slot.powered) { startWorker(); break; }
+      if (slot.powered && !slot.conn.cloud) { startWorker(); break; }
   }
   wake();
 }
@@ -842,7 +1003,7 @@ void printersHold(bool hold) {
 bool printersLanJob() {
   Lock lock;
   for (const auto& slot : s_slots) {
-    if (!slot.powered || !slot.state) continue;
+    if (!slot.powered || !slot.state || slot.conn.cloud) continue;
     const char* st = slot.state->gcodeState;
     if (!strcmp(st, "RUNNING") || !strcmp(st, "PREPARE") || !strcmp(st, "SLICING") || !strcmp(st, "PAUSE"))
       return true;
@@ -854,6 +1015,21 @@ bool printerRead(const String& id, PrinterState& out) {
   Lock lock;
   for (const auto& slot : s_slots) {
     if (!id.length() || slot.conn.id != id || !slot.powered) continue;
+    if (slot.conn.cloud) {
+      if (slot.agent) {
+        out = slot.agent->state;
+        if (slot.agent->stale) {
+          out.link = PRN_FAILED;
+          snprintf(out.err, sizeof(out.err), "No news from %s", out.pcName[0] ? out.pcName : "the PC");
+        }
+      } else {
+        out = PrinterState{};
+        out.viaPc = true;
+        out.link = PRN_CONNECTING;
+        strlcpy(out.err, "Waiting for a PC agent", sizeof(out.err));
+      }
+      return true;
+    }
     if (slot.state) out = *slot.state;
     else {
       out = PrinterState{};
@@ -867,7 +1043,38 @@ bool printerRead(const String& id, PrinterState& out) {
 
 uint32_t printersVersion() {
   Lock lock;
+  // A cloud printer whose agents went quiet: one bump, so the pages redraw it.
+  for (auto& slot : s_slots)
+    if (slot.agent && !slot.agent->stale && millis() - slot.agent->rxMs > AGENT_STALE_MS) {
+      slot.agent->stale = true;
+      ++s_version;
+    }
   return s_version;
+}
+
+void printersFromAgent(JsonArrayConst printers, const char* pcId, const char* pcName) {
+  Lock lock;
+  for (JsonObjectConst o : printers) {
+    const char* serial = o["serial"] | "";
+    if (!serial[0] || strlen(serial) >= sizeof(Announced::serial)) continue;
+    announce(o, pcName);
+    for (Slot& slot : s_slots)
+      if (slot.powered && slot.conn.cloud && slot.conn.serial == serial) applyAgent(slot, o, pcId, pcName);
+  }
+}
+
+void printersAnnounced(JsonArray out) {
+  Lock lock;
+  const uint32_t now = millis();
+  for (const auto& a : s_announced) {
+    if (!a.ms || now - a.ms > ANNOUNCED_MS) continue;
+    JsonObject o = out.add<JsonObject>();
+    o["serial"] = a.serial;
+    o["name"] = a.name;
+    o["model"] = a.model;
+    o["pc"] = a.pc;
+    o["age_s"] = (now - a.ms) / 1000;
+  }
 }
 
 uint32_t printersStackFree() { return s_stackFree; }
@@ -875,7 +1082,8 @@ uint32_t printersStackFree() { return s_stackFree; }
 bool printerLight(const String& id, bool on) {
   Lock lock;
   for (auto& slot : s_slots) {
-    if (!id.length() || slot.conn.id != id || !slot.powered || !slot.state || slot.state->link != PRN_ONLINE) continue;
+    if (!id.length() || slot.conn.id != id || !slot.powered || slot.conn.cloud || !slot.state ||
+        slot.state->link != PRN_ONLINE) continue;
     slot.light = on ? 1 : 0;
     wake();
     return true;

@@ -1426,12 +1426,14 @@ String deckPrintersJson() {
   for (const PrinterDef& d : s_cfg.printers) {
     JsonObject o = arr.add<JsonObject>();
     o["id"] = d.id;
-    o["secret"] = printerHasSecret(d.id);
+    o["via"] = d.cloud ? "cloud" : "lan";
+    o["secret"] = printerHasSecret(d.id, d.cloud);
     o["powered"] = printerPowered(d.id);
     if (!s || !printerRead(d.id, *s)) continue;
     static const char* const kLink[] = {"off", "connecting", "online", "failed"};
     o["link"] = kLink[s->link < 4 ? s->link : 0];
     o["err"] = s->err;
+    if (s->viaPc) o["pc"] = s->pcName;
     o["state"] = s->gcodeState;
     o["progress"] = s->progress;
     o["dual"] = s->dualNozzle;
@@ -1439,6 +1441,7 @@ String deckPrintersJson() {
     o["ams"] = s->amsCount;
   }
   heap_caps_free(s);
+  printersAnnounced(doc["announced"].to<JsonArray>());  // cloud printers the PC agents push
   String out;
   serializeJson(doc, out);
   return out;

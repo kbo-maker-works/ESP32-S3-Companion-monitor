@@ -14,6 +14,7 @@
 #include "network/web_assets.h"
 #include "ui/deck_ui.h"
 #include "printers/deck_printers.h"
+#include "printers/deck_bambu.h"
 #include "ui/deck_config.h"
 #include "network/deck_http.h"
 #include "ui/deck_icons.h"
@@ -2339,6 +2340,29 @@ static void handlePcWork() {
   sendJsonMessage(200, true, "OK");
 }
 
+// POST /api/pc/printers - a PC agent's Bambu Cloud printers (pc-agent/td_bambu.py),
+// already parsed; only the cloud printers configured with their serial take it.
+static void handlePcPrinters() {
+  const String& body = server.arg("plain");
+  if (!body.length() || body.length() > 16384) {
+    sendJsonMessage(400, false, "Expected a JSON body up to 16 KB");
+    return;
+  }
+  JsonDocument doc(psramJson());
+  if (deserializeJson(doc, body)) {
+    sendJsonMessage(400, false, "bad JSON");
+    return;
+  }
+  const char* id = doc["pc_id"] | "";
+  const PcSource* pc = id[0] ? pcSource(id) : nullptr;
+  if (!pc || !(pc->ip == server.client().remoteIP())) {
+    sendJsonMessage(403, false, "unknown PC (its agent must be sending metrics)");
+    return;
+  }
+  deck::printersFromAgent(doc["printers"].as<JsonArrayConst>(), pc->id, pc->name);
+  sendJsonMessage(200, true, "OK");
+}
+
 static void handlePcForget() {
   const bool ok = pcForget(server.arg("id"));
   sendJsonMessage(ok ? 200 : 404, ok, ok ? "PC removed" : "No such PC");
@@ -2586,6 +2610,7 @@ void initWebServer() {
   server.on("/api/deck/tap", HTTP_POST, handleDeckTap);
   server.on("/api/pc/forget", HTTP_POST, handlePcForget);
   server.on("/api/pc/work", HTTP_POST, handlePcWork);
+  server.on("/api/pc/printers", HTTP_POST, handlePcPrinters);
   server.on("/api/pc/status", HTTP_GET, handlePcStatus);
   server.on("/api/pc/pair", HTTP_POST, handlePcPair);
   server.on("/api/pc/pair/confirm", HTTP_POST, handlePcPairConfirm);

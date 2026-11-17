@@ -412,7 +412,7 @@ def usage_state(now):
 # ---------------------------------------------------------------------------
 class Gpu:
     """NVIDIA GPU through one long-running `nvidia-smi -l 1` (no process per sample)."""
-    FIELDS = "utilization.gpu,temperature.gpu,memory.used,memory.total,power.draw"
+    FIELDS = "utilization.gpu,temperature.gpu,memory.used,memory.total,power.draw,fan.speed,clocks.gr"
 
     def __init__(self):
         self.values = None
@@ -430,12 +430,16 @@ class Gpu:
 
     def _read(self):
         for line in self.proc.stdout:
-            parts = [p.strip() for p in line.split(",")]
-            try:
-                util, temp, used, total, power = (float(p) for p in parts[:5])
-            except ValueError:
-                continue  # first GPU only; "[N/A]" fields are skipped
-            self.values = (util, temp, 100.0 * used / total if total else 0.0, power)
+            vals = []
+            for p in line.split(",")[:7]:
+                try:
+                    vals.append(float(p))
+                except ValueError:
+                    vals.append(None)  # "[N/A]" (a laptop's power, a fanless card): that field only
+            if len(vals) < 7 or None in vals[:4]:
+                continue
+            util, temp, used, total, power, fan, clock = vals
+            self.values = (util, temp, 100.0 * used / total if total else 0.0, used / 1024.0, power, fan, clock)
 
 
 class Metrics:
@@ -448,6 +452,10 @@ class Metrics:
         self.net = self.ps.net_io_counters()
         self.net_t = time.monotonic()
         self.gpu = Gpu()
+        self.hwmon = None
+        if os.name == "nt":
+            import td_hwmon  # RTSS and MSI Afterburner, read only while they run
+            self.hwmon = td_hwmon
         self.disk_path = os.environ.get("SystemDrive", "C:") + "\\" if os.name == "nt" else "/"
         # macOS: "/" is the sealed system volume (a few GB); the files live on Data.
         if sys.platform == "darwin" and os.path.isdir("/System/Volumes/Data"):
@@ -489,8 +497,16 @@ class Metrics:
             (10, "UP", "KB/s", round(up * 10)),
         ]
         if self.gpu.values:
-            util, temp, vram, power = self.gpu.values
-            m += [(4, "GPU", "%", util), (5, "GPUT", "C", temp), (6, "VRAM", "%", vram), (7, "GPUW", "W", power)]
+            util, temp, vram, vram_gb, power, fan, clock = self.gpu.values
+            m += [(4, "GPU", "%", util), (5, "GPUT", "C", temp), (6, "VRAM", "%", vram),
+                  (18, "VRAM USED", "GB", vram_gb)]
+            m += [x for x in ((7, "GPUW", "W", power), (14, "GPU FAN", "%", fan), (15, "GPU CLOCK", "MHz", clock))
+                  if x[3] is not None]
+        hw = self.hwmon.read() if self.hwmon else {}
+        for mid, name, unit, key in ((12, "FPS", "FPS", "fps"), (13, "FRAMETIME", "ms", "frametime"),
+                                     (16, "CPUT", "C", "cpu_temp"), (17, "CPUW", "W", "cpu_power")):
+            if key in hw:
+                m.append((mid, name, unit, hw[key]))
         batt = self._battery()
         if batt is not None:  # laptops: the deck's "PC stats" widget rings it
             m.append((11, "BATT", "%", batt))
@@ -629,6 +645,21 @@ def start_work(target, pc_id, pc_name, verbose):
         return None
 
 
+def start_bambu(target, pc_id, pc_name, verbose):
+    """Bambu printers through Bambu Cloud (td_bambu.py, signed in on the settings
+    page). Runs signed out too: the page signs in and picks the printers."""
+    try:
+        import td_bambu
+        cloud = td_bambu.Cloud(target.get, pc_id, pc_name, verbose)
+        cloud.start()
+        names = [p.name for p in cloud.printers.values()]
+        print("bambu: %s" % (", ".join(names) or "no printers picked"), flush=True)
+        return cloud
+    except Exception as e:  # no paho-mqtt, a bad bambu.json: the rest goes on
+        print("bambu off: %s" % e, flush=True)
+        return None
+
+
 def start_awake():
     """Keep awake (td_awake.py): the deck's "awake_toggle" and the settings page."""
     try:
@@ -655,13 +686,13 @@ def start_batteries(pc_name):
         return None
 
 
-def start_portal(port, worker, host, target, pc_name, awake=None):
+def start_portal(port, worker, host, target, pc_name, awake=None, bambu=None):
     """The settings page on 127.0.0.1 (td_portal.py)."""
     if not port:
         return
     try:
         import td_portal
-        portal = td_portal.Portal(worker, host, target.get, pc_name, port, awake=awake)
+        portal = td_portal.Portal(worker, host, target.get, pc_name, port, awake=awake, bambu=bambu)
         if portal.serve():
             print("settings: %s" % portal.url, flush=True)
             return portal
@@ -689,7 +720,8 @@ def opener(url):
     return run
 
 
-def build_packet(metrics, pc_id, pc_name, pc=None):
+def build_packets(metrics, pc_id, pc_name, pc=None):
+    """This second's packets: one, or two when everything won't fit in one."""
     now = time.time()
     pkt = {
         "pc_id": pc_id,
@@ -704,35 +736,44 @@ def build_packet(metrics, pc_id, pc_name, pc=None):
         pkt["claude"] = claude_state(now)
     if pc:
         pc.fill(pkt)
-    # Over PACKET_MAX the deck gets a cut packet and drops it: shed, least
-    # useful first, until it fits.
+    # Over PACKET_MAX the deck gets a cut packet and drops it. Claude's state
+    # then goes on its own, first (the deck takes a Claude-only packet without
+    # touching the metrics or the PC state); it carries the command port and
+    # nonces too, as the deck resets them on every packet.
+    packets = [pkt]
+    if len(packet_bytes(pkt)) > PACKET_MAX and "claude" in pkt:
+        solo = {k: pkt[k] for k in ("pc_id", "pc_name", "cmd_port", "art_port", "nonces") if k in pkt}
+        solo["claude"] = pkt.pop("claude")
+        packets.insert(0, solo)
+    for p in packets:  # what still doesn't fit is shed, least useful first
+        while len(packet_bytes(p)) > PACKET_MAX and shed(p):
+            pass
+    return packets
+
+
+def shed(pkt):
+    """Drops the least useful part of pkt; False when nothing is left to drop."""
     claude, state = pkt.get("claude") or {}, pkt.get("pcstate") or {}
     ss = claude.get("ss") or []
     media = state.get("media") or {}
-
-    def shed():
-        if any(r[3] for r in ss):  # the session list's details
-            for r in ss:
-                r[3] = ""
-        elif ss:                   # then its rows
-            ss.pop()
-        elif len((media.get("title") or "").encode()) > 60 or len((media.get("artist") or "").encode()) > 60:
-            for k in ("title", "artist"):
-                if k in media:
-                    media[k] = clip(media[k], 60)
-        elif state.get("batt"):
-            state["batt"].pop()
-        elif claude.get("acct") or claude.get("org"):
-            claude["acct"] = claude["org"] = ""
-        elif "pcstate" in pkt:
-            del pkt["pcstate"]
-        else:
-            return False
-        return True
-
-    while len(packet_bytes(pkt)) > PACKET_MAX and shed():
-        pass
-    return pkt
+    if any(r[3] for r in ss):  # the session list's details
+        for r in ss:
+            r[3] = ""
+    elif ss:                   # then its rows
+        ss.pop()
+    elif len((media.get("title") or "").encode()) > 60 or len((media.get("artist") or "").encode()) > 60:
+        for k in ("title", "artist"):
+            if k in media:
+                media[k] = clip(media[k], 60)
+    elif state.get("batt"):
+        state["batt"].pop()
+    elif claude.get("acct") or claude.get("org"):
+        claude["acct"] = claude["org"] = ""
+    elif "pcstate" in pkt:
+        del pkt["pcstate"]
+    else:
+        return False
+    return True
 
 
 def packet_bytes(pkt):
@@ -780,7 +821,8 @@ def main():
     if args.once:
         pc = PcSide(pc_id, batteries=start_batteries(pc_name))
         time.sleep(2.5)  # the media thread's first poll
-        print(json.dumps(build_packet(metrics, pc_id, pc_name, pc), indent=2, ensure_ascii=False))
+        for pkt in build_packets(metrics, pc_id, pc_name, pc):
+            print(json.dumps(pkt, indent=2, ensure_ascii=False))
         return
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -788,7 +830,8 @@ def main():
     print("TouchDeck agent: %s -> %s:%d" % (pc_name, args.host, DECK_PORT), flush=True)
     worker = start_work(target, pc_id, pc_name, args.verbose)
     awake = start_awake()
-    portal = start_portal(args.portal_port, worker, args.host, target, pc_name, awake)
+    bambu = start_bambu(target, pc_id, pc_name, args.verbose)
+    portal = start_portal(args.portal_port, worker, args.host, target, pc_name, awake, bambu)
     # Taps on the deck's Work rows open their MR / ticket / pipeline here; a
     # Keep awake tile toggles it.
     handlers = {}
@@ -806,16 +849,20 @@ def main():
         t0 = time.monotonic()
         try:
             addr = target.get()
-            pkt = build_packet(metrics, pc_id, pc_name, pc)
+            packets = build_packets(metrics, pc_id, pc_name, pc)
             if addr == BROADCAST:  # the whole LAN hears it: only the PC's name and metrics
-                pkt = {k: v for k, v in pkt.items() if k in ("pc_id", "pc_name", "timestamp", "status", "metrics")}
-            data = packet_bytes(pkt)
-            sock.sendto(data, (addr, DECK_PORT))
+                packets = [{k: v for k, v in packets[-1].items()
+                            if k in ("pc_id", "pc_name", "timestamp", "status", "metrics")}]
+            sizes = []
+            for pkt in packets:
+                data = packet_bytes(pkt)
+                sock.sendto(data, (addr, DECK_PORT))
+                sizes.append(str(len(data)))
             if failing:
                 print("%s send OK again -> %s" % (time.strftime("%H:%M:%S"), addr), flush=True)
                 failing = None
             if args.verbose:
-                print("%s %d B -> %s" % (time.strftime("%H:%M:%S"), len(data), addr), flush=True)
+                print("%s %s B -> %s" % (time.strftime("%H:%M:%S"), "+".join(sizes), addr), flush=True)
         except Exception as e:  # a bad session file or a sensor glitch must not end the agent
             if str(e) != failing:
                 what = "send failed" if isinstance(e, OSError) else "packet failed (%s)" % type(e).__name__

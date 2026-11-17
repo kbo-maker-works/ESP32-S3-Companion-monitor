@@ -222,6 +222,13 @@ bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err)
     d.id = (const char*)(pv["id"] | "");
     d.name = (const char*)(pv["name"] | "");
     d.ip = (const char*)(pv["ip"] | "");
+    const char* via = pv["via"] | "lan";
+    if (strcmp(via, "lan") && strcmp(via, "cloud")) {
+      if (err) *err = "printer '" + d.id + "': via must be lan or cloud";
+      return false;
+    }
+    d.cloud = !strcmp(via, "cloud");  // through a PC agent: no ip
+    if (d.cloud) d.ip = "";
     // The id names NVS keys ("s_<id>"): short and plain.
     bool plain = d.id.length() >= 1 && d.id.length() <= 12;
     for (size_t i = 0; plain && i < d.id.length(); i++)
@@ -230,7 +237,7 @@ bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err)
       if (err) *err = "printer id '" + d.id + "' must be unique, 1-12 letters, digits or _";
       return false;
     }
-    if (!d.ip.length()) {
+    if (!d.cloud && !d.ip.length()) {
       if (err) *err = "printer '" + d.id + "' needs an ip";
       return false;
     }

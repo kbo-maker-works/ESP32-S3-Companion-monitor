@@ -2,10 +2,15 @@
 // the printer's access code). One worker task serves every powered printer;
 // a printer that is not powered has no connection, no buffers and no state.
 // The UI reads copies under a lock and redraws when printersVersion() moves.
+//
+// A cloud printer ("via": "cloud") has no connection here: a PC agent signed
+// in to Bambu Cloud (pc-agent/td_bambu.py) pushes its state, already parsed,
+// to POST /api/pc/printers, and the deck only shows it. Read only.
 #ifndef DECK_BAMBU_H
 #define DECK_BAMBU_H
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <vector>
 #include "printers/deck_hms.h"
 
@@ -23,6 +28,7 @@ struct PrinterConn {
   String ip;
   String serial;
   String code;    // LAN access code
+  bool cloud = false;  // through a PC agent: serial only, no ip or code
 };
 
 enum PrinterLink : uint8_t {
@@ -54,6 +60,8 @@ struct PrinterState {
   PrinterLink link = PRN_OFF;
   char err[48] = "";
   uint32_t lastReportMs = 0;  // millis() of the last report, 0 = none yet
+  bool viaPc = false;         // a cloud printer: shown from a PC agent's pushes, read only
+  char pcName[24] = "";       // the PC whose agent sent it
 
   // Job
   char gcodeState[16] = "";   // IDLE, PREPARE, RUNNING, PAUSE, FINISH, FAILED
@@ -116,6 +124,14 @@ bool printerLight(const String& id, bool on);
 uint32_t printersStackFree();
 // Name of a stg_cur stage ("Bed Leveling"), nullptr for printing / idle / unknown.
 const char* printerStageName(int stage);
+
+// A PC agent's push (POST /api/pc/printers): each printer's state, matched to
+// the powered cloud printers by serial. With two PCs on one printer, the one
+// already showing it keeps it until it goes quiet or the other is fresher.
+void printersFromAgent(JsonArrayConst printers, const char* pcId, const char* pcName);
+// Printers the agents have pushed lately, configured or not, for the portal's
+// picker: [{"serial", "name", "model", "pc", "age_s"}].
+void printersAnnounced(JsonArray out);
 
 }  // namespace deck
 

@@ -9,6 +9,8 @@ in portal/dist (cd portal && npm install && npm run build) and a small API:
     PUT  /api/config   saves ~/.touchdeck/work.json and reconfigures the worker
     POST /api/test     polls GitLab / Jira with the form, saves nothing
     GET  /api/logs     the end of the agent's log (macOS service)
+    POST /api/bambu/signin, /code, /resend, /restart, /signout, GET /devices,
+    PUT  /api/bambu/printers   Bambu Cloud sign-in and printers (td_bambu.py)
 
 It listens on 127.0.0.1 only, so the tokens never leave this machine and no
 firewall prompt shows. A token is never sent back: the page only learns whether
@@ -28,6 +30,7 @@ import time
 import urllib.parse
 from typing import List, Optional
 
+import td_bambu
 import td_work
 
 PORT = 4213
@@ -295,6 +298,55 @@ def create_app(portal):
             raise HTTPException(404, "Keep awake is not available on this system")
         return {"granted": portal.awake.ask_permission(), "awake": portal.awake.status()}
 
+    class SignInForm(BaseModel):
+        region: str = Field("global", max_length=10)
+        account: str = Field(..., min_length=3, max_length=200)
+        password: str = Field(..., min_length=1, max_length=200)
+
+    class CodeForm(BaseModel):
+        code: str = Field(..., min_length=4, max_length=12)
+
+    class PickedPrinter(BaseModel):
+        serial: str = Field(..., min_length=4, max_length=40, pattern=r"^[A-Za-z0-9]+$")
+        name: str = Field("", max_length=60)
+        model: str = Field("", max_length=40)
+
+    class PrintersForm(BaseModel):
+        printers: List[PickedPrinter] = Field(default_factory=list, max_length=td_bambu.PRN_MAX)
+
+    def bambu():
+        if not portal.bambu:
+            raise HTTPException(404, "Bambu printers are off: see the agent's log (is paho-mqtt installed?)")
+        return portal
+
+    @app.post("/api/bambu/signin")
+    def bambu_signin(form: SignInForm):
+        return bambu().bambu_signin(form.region, form.account, form.password)
+
+    @app.post("/api/bambu/code")
+    def bambu_code(form: CodeForm):
+        return bambu().bambu_code(form.code)
+
+    @app.post("/api/bambu/resend")
+    def bambu_resend():
+        return bambu().bambu_resend()
+
+    @app.post("/api/bambu/restart")
+    def bambu_restart():
+        return bambu().bambu_restart()
+
+    @app.post("/api/bambu/signout")
+    def bambu_signout():
+        return bambu().bambu_signout()
+
+    @app.get("/api/bambu/devices")
+    def bambu_devices():
+        return bambu().bambu_devices()
+
+    @app.put("/api/bambu/printers")
+    def bambu_printers(form: PrintersForm):
+        return bambu().bambu_pick([p.model_dump() for p in form.printers])
+
     @app.get("/api/logs")
     def logs(lines: int = 200):
         got = tail(portal.log_file, max(1, min(1000, lines)))
@@ -329,9 +381,11 @@ def create_app(portal):
 
 class Portal:
     def __init__(self, worker, deck_host, deck_addr, pc_name, port=PORT, path=td_work.CONFIG_FILE,
-                 log_file=LOG_FILE, awake=None):
+                 log_file=LOG_FILE, awake=None, bambu=None, bambu_path=td_bambu.CONFIG_FILE):
         self.worker, self.deck_host, self.deck_addr, self.pc_name = worker, deck_host, deck_addr, pc_name
         self.awake = awake
+        self.bambu, self.bambu_path = bambu, bambu_path
+        self.pending = None  # a Bambu sign-in waiting for its code: {region, account, kind, tfa_key, at}
         self.port, self.path, self.log_file = port, path, log_file
         self.session = secrets.token_urlsafe(24)
         self.hosts = {"127.0.0.1:%d" % port, "localhost:%d" % port}
@@ -348,7 +402,114 @@ class Portal:
                 "deck": {"host": self.deck_host, "addr": self.deck_addr()},
                 "status": self.worker.status() if self.worker else None,
                 "awake": self.awake.status() if self.awake else None,
+                "bambu": self.bambu_state(),
                 "started": self.started, "now": time.time()}
+
+    # -- Bambu Cloud (td_bambu.py) ---------------------------------------------
+    PENDING_S = 900  # a code request older than this starts over
+
+    def bambu_state(self):
+        if not self.bambu:
+            return None
+        cfg = td_bambu.load_config(self.bambu_path)
+        p = self.pending if self.pending and time.time() - self.pending["at"] < self.PENDING_S else None
+        return {"region": td_bambu.region_of(cfg), "account": cfg.get("account", ""),
+                "signed_in": bool(cfg.get("token")),
+                "printers": [{k: x.get(k, "") for k in ("serial", "name", "model")}
+                             for x in cfg.get("printers") or [] if isinstance(x, dict)],
+                "pending": {"kind": p["kind"], "account": p["account"]} if p else None,
+                "status": self.bambu.status()}
+
+    def _bambu_signed_in(self, region, account, got):
+        """Saves the sign-in; with no printer picked yet and only one on the account, picks it."""
+        with self.save_lock:
+            cfg = td_bambu.load_config(self.bambu_path)
+            if cfg.get("account", "").lower() != account.lower() or td_bambu.region_of(cfg) != region:
+                cfg["printers"] = []  # another account: its printers aren't these
+            cfg.update(region=region, account=account, token=got["token"])
+            if got.get("refresh"):
+                cfg["refresh"] = got["refresh"]
+            else:
+                cfg.pop("refresh", None)
+            found = None
+            try:
+                found = td_bambu.devices(region, got["token"])
+            except td_bambu.CloudError as e:
+                print("bambu: printer list after sign-in: %s" % e, flush=True)
+            if not cfg.get("printers") and found and len(found) == 1:
+                cfg["printers"] = [{k: found[0][k] for k in ("serial", "name", "model")}]
+            td_bambu.save_config(cfg, self.bambu_path)
+            self.bambu.configure(cfg)
+        self.pending = None
+        return {"devices": found, "bambu": self.bambu_state()}
+
+    def bambu_signin(self, region, account, password):
+        region = "cn" if region == "cn" else "global"
+        account = account.strip()
+        try:
+            got = td_bambu.login(region, account, password)
+        except td_bambu.CloudError as e:
+            raise BadInput(str(e))
+        if got.get("need"):
+            self.pending = {"region": region, "account": account, "kind": got["need"],
+                            "tfa_key": got.get("tfa_key", ""), "at": time.time()}
+            return {"need": got["need"], "bambu": self.bambu_state()}
+        return self._bambu_signed_in(region, account, got)
+
+    def bambu_code(self, code):
+        p = self.pending
+        if not p or time.time() - p["at"] >= self.PENDING_S:
+            self.pending = None
+            raise BadInput("The code request expired: sign in again")
+        try:
+            got = td_bambu.verify_code(p["region"], p["account"], code, p["kind"], p["tfa_key"])
+        except td_bambu.CloudError as e:
+            raise BadInput(str(e))
+        return self._bambu_signed_in(p["region"], p["account"], got)
+
+    def bambu_resend(self):
+        p = self.pending
+        if not p or p["kind"] != "email":
+            raise BadInput("No emailed code is pending")
+        try:
+            td_bambu.send_email_code(p["region"], p["account"])
+        except td_bambu.CloudError as e:
+            raise BadInput(str(e))
+        p["at"] = time.time()
+        return {"bambu": self.bambu_state()}
+
+    def bambu_restart(self):
+        self.pending = None
+        return {"bambu": self.bambu_state()}
+
+    def bambu_signout(self):
+        """Forgets the token (Bambu has no sign-out call for it); keeps the account and printers."""
+        with self.save_lock:
+            cfg = td_bambu.load_config(self.bambu_path)
+            cfg.pop("token", None)
+            cfg.pop("refresh", None)
+            td_bambu.save_config(cfg, self.bambu_path)
+            self.bambu.configure(cfg)
+        self.pending = None
+        return {"bambu": self.bambu_state()}
+
+    def bambu_devices(self):
+        cfg = td_bambu.load_config(self.bambu_path)
+        if not cfg.get("token"):
+            raise BadInput("Sign in first")
+        try:
+            return {"devices": td_bambu.devices(td_bambu.region_of(cfg), cfg["token"])}
+        except td_bambu.CloudError as e:
+            raise BadInput(str(e))
+
+    def bambu_pick(self, printers):
+        with self.save_lock:
+            cfg = td_bambu.load_config(self.bambu_path)
+            cfg["printers"] = [{"serial": p["serial"], "name": p["name"].strip() or p["serial"],
+                                "model": p["model"].strip()} for p in printers]
+            td_bambu.save_config(cfg, self.bambu_path)
+            self.bambu.configure(cfg)
+        return {"bambu": self.bambu_state()}
 
     def save(self, form):
         with self.save_lock:

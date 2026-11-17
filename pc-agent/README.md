@@ -18,6 +18,24 @@
   | 9  | DOWN     | KB/s | all network cards |
   | 10 | UP       | KB/s | all network cards |
   | 11 | BATT     | %    | battery charge (laptops only) |
+  | 12 | FPS      | FPS  | RTSS: the 3D app last in the foreground, 0 once it stops drawing |
+  | 13 | FRAMETIME | ms  | RTSS |
+  | 14 | GPU FAN  | %    | nvidia-smi |
+  | 15 | GPU CLOCK | MHz | nvidia-smi |
+  | 16 | CPUT     | C    | MSI Afterburner |
+  | 17 | CPUW     | W    | MSI Afterburner |
+  | 18 | VRAM USED | GB  | nvidia-smi |
+
+  12, 13, 16 and 17 come from **RivaTuner Statistics Server** and **MSI
+  Afterburner** (Windows, td_hwmon.py) while they run: both publish their
+  readings in shared memory any process can read, so no admin and no extra
+  package. Afterburner is the only way to the CPU's temperature here (Windows
+  doesn't give it to a normal process); its sensor must be on in Afterburner's
+  Monitoring tab. A metric whose source isn't running isn't sent.
+
+  With these the packet can outgrow PACKET_MAX (a song playing, the deck
+  paired): Claude's state then goes in a packet of its own, sent first, rather
+  than the session list being cut.
 
   The **PC stats** widget shows the first four of CPU, RAM, GPU, DISK and
   BATT as rings (like macOS's Batteries widget) or as a list, from the tile's
@@ -31,6 +49,9 @@
   as `pmset -g accps` lists them): no permission needed. Only devices that
   report a battery to macOS appear, and only while connected (a sleeping
   mouse drops out). Windows: the PC's own battery only, for now.
+
+- **Bambu printers through Bambu Cloud** (td_bambu.py, below): for the deck's
+  printer pages and tiles, with the printer left in cloud mode.
 
 - **Claude Code's state** for the "Mascota Claude" widget: thinking, coding
   (with the tool it runs), several sessions at once, waiting for you (yellow),
@@ -184,6 +205,37 @@ can also be edited by hand. Any section can be left out:
 - Check the tokens without the deck: `python3 td_work.py --once` prints what it
   would send (or the HTTP error per source). `python3 td_work.py --sample --host
   <deck>` shows sample data on the deck.
+
+## Bambu printers through Bambu Cloud (td_bambu.py)
+
+For a printer kept in its normal cloud mode (a P2S, or any one you don't want in
+LAN-only mode: Bambu Handy's notifications, the camera and remote printing keep
+working). The agent signs in to Bambu Cloud, listens to the printers you pick on
+Bambu's MQTT broker and pushes their state, already parsed, to the deck
+(`POST /api/pc/printers`) when it changes and once a minute. The deck only shows
+it; nothing is sent to the printer but status requests.
+
+1. Agent settings page → **Printers**: region, email, password, then the code
+   Bambu emails (or your authenticator app's). The password goes to Bambu only
+   and is never stored; `~/.touchdeck/bambu.json` (mode 600) keeps the sign-in,
+   about three months. Pick the printers (two at most).
+2. Deck portal → Advanced → **Bambu Lab printers** on; Printers → Add printer →
+   Connection **Bambu Cloud (through a PC agent)** → **Use this printer** →
+   Create printer page → Save to device.
+
+Several PCs can serve one printer (sign in on each): the deck keeps the one
+already showing it until it goes quiet for 90 s or the other has a fresher
+report. With every serving PC off, the printer shows "No news from <PC>".
+
+Bambu's rules, kept here: its own User-Agent (Bambu's firewall blocks software
+posing as Bambu Studio or OrcaSlicer since November 2026), a status request
+("pushall") on connecting and then only while the printer is idle, every 5 min,
+at most one every 2 min (a printing printer pushes by itself; requests every
+few seconds get the broker session refused), and no control commands over the
+cloud. When Bambu refuses the token, the agent stops retrying and both the
+settings page and the deck say to sign in again. Needs `paho-mqtt`
+(requirements.txt). `python td_bambu.py --sample --host <deck>` shows a sample
+printer on the deck's portal picker.
 
 ## macOS
 

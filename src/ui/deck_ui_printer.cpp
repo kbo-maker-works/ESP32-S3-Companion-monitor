@@ -1178,6 +1178,10 @@ void printerTap(TileRt& r) {
   }
   if (d.show != PS_LIGHT) return;
   const PrinterState* s = printerFor(d);
+  if (s && s->viaPc) {  // Bambu Cloud through a PC agent: shown, never switched
+    deckToastShow("Read only through Bambu Cloud", 1800);
+    return;
+  }
   if (!s || s->link != PRN_ONLINE || !printerLight(d.printer, s->light != 1)) {
     deckToastShow("Printer not connected", 1800);
     return;

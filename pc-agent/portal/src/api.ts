@@ -32,9 +32,29 @@ export type State = {
     push: { ok: boolean | null; at: number; addr: string };
   };
   awake: AwakeStatus | null;
+  bambu: BambuState | null;
   started: number;
   now: number;
 };
+
+/** Bambu Cloud (td_bambu.py): applied at once, not through Save. */
+export type BambuPrinter = { serial: string; name: string; model: string };
+export type BambuDevice = BambuPrinter & { online: boolean };
+export type BambuLink = "online" | "connecting" | "offline" | "error";
+export type BambuState = {
+  region: "global" | "cn";
+  account: string;
+  signed_in: boolean;
+  printers: BambuPrinter[];
+  pending: null | { kind: "email" | "app"; account: string };
+  status: {
+    state: "off" | "signin" | "connecting" | "online" | "error";
+    err: string;
+    printers: (BambuPrinter & { link: BambuLink; rx: number; st: string; pct: number })[];
+    push: { ok: boolean | null; at: number; addr: string };
+  };
+};
+type BambuReply = { bambu: BambuState; need?: "email" | "app"; devices?: BambuDevice[] | null };
 
 /** Keep awake (td_awake.py): applied at once, not through Save. */
 export type AwakeStatus = {
@@ -131,6 +151,16 @@ export const api = {
   logs: (lines = 300) => call<Logs>(`/api/logs?lines=${lines}`),
   awake: (change: { on?: boolean; jiggle?: boolean }) => call<AwakeStatus>("/api/awake", "PUT", change),
   awakePermission: () => call<{ granted: boolean; awake: AwakeStatus }>("/api/awake/permission", "POST"),
+  bambu: {
+    signin: (region: string, account: string, password: string) =>
+      call<BambuReply>("/api/bambu/signin", "POST", { region, account, password }),
+    code: (code: string) => call<BambuReply>("/api/bambu/code", "POST", { code }),
+    resend: () => call<BambuReply>("/api/bambu/resend", "POST"),
+    restart: () => call<BambuReply>("/api/bambu/restart", "POST"),
+    signout: () => call<BambuReply>("/api/bambu/signout", "POST"),
+    devices: () => call<{ devices: BambuDevice[] }>("/api/bambu/devices"),
+    pick: (printers: BambuPrinter[]) => call<BambuReply>("/api/bambu/printers", "PUT", { printers }),
+  },
 };
 
 export function toForm(s: State): Form {

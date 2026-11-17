@@ -64,7 +64,7 @@
 <p class="field-hint">The prefix is the part before the colon on <a href="https://icon-sets.iconify.design/" target="_blank" rel="noopener">icon-sets.iconify.design</a>. "Upload file" takes an Iconify .json set (its own prefix, or the one typed above) or a Custom Brand Icons .js subset.</p>
 <div class="dk-status"><span class="dk-dot" id="dkPkDot"></span><span id="dkPkState">checking...</span></div></div>
 <div class="card" id="dkPrnCard"><div class="card-head"><h2 class="card-title">Printers</h2><span class="tag" id="dkPrnTag">Bambu Lab</span></div>
-<p class="field-hint">The deck talks to the printer directly over the LAN: it must be in LAN mode or have LAN access on, and its serial and access code are stored only on the device. Printers and pages apply on "Save to device" below; Save serial and code applies at once.</p>
+<p class="field-hint"><b>LAN</b>: the deck talks to the printer directly; it must be in LAN mode or have LAN access on, and its serial and access code are stored only on the device. <b>Bambu Cloud</b>: the printer stays in cloud mode (Bambu Handy, the camera and remote printing keep working) and a PC agent signed in to Bambu Cloud sends it, read only, while that PC is on; sign in and pick the printer on the agent's settings page (Printers). Printers and pages apply on "Save to device" below; Save serial and code and Use this printer apply at once.</p>
 <div id="dkPrnBody">
 <div id="dkPrn"></div><div class="dk-row"><button type="button" class="btn" id="dkPrnAdd">+ Add printer</button></div></div>
 <div class="dk-save"><span class="dk-msg" id="dkPrnMsg">No changes</span><button type="button" class="btn btn-accent" id="dkPrnSave">Save to device</button></div></div>
@@ -583,6 +583,7 @@
     ["summary", "Summary"],
   ];
   let prnStat = {};
+  let prnAnn = []; /* cloud printers the PC agents push: {serial, name, model, pc, age_s} */
   const prnName = (id) => {
     const d = (deck.printers || []).find((x) => x.id === id);
     return d ? d.name || d.id : id;
@@ -633,10 +634,11 @@
     );
   }
   function prnLine(d, s) {
-    if (!s.secret) return "Serial and access code not saved";
+    if (!s.secret) return d.via === "cloud" ? "No printer picked yet" : "Serial and access code not saved";
     if (!s.powered) return "Off";
     return (
       (s.link || "") +
+      (s.pc ? " via " + s.pc : "") +
       (s.err ? " - " + s.err : "") +
       (s.state ? " - " + s.state.toLowerCase() : "") +
       (s.state === "RUNNING" ? " " + s.progress + "%" : "")
@@ -648,6 +650,7 @@
       const r = await api("/api/printers");
       prnStat = {};
       (r.printers || []).forEach((s) => (prnStat[s.id] = s));
+      prnAnn = r.announced || [];
       renderPrinters();
     } catch (e) {}
   }
@@ -678,15 +681,16 @@
       ps
         .map((d, i) => {
           const s = prnStat[d.id] || {};
+          const cloud = d.via === "cloud";
+          const fields = [
+            ["id", "Id (letters, digits, _)", "h2c"],
+            ["name", "Name", "H2C"],
+          ].concat(cloud ? [] : [["ip", "IP address", "192.168.0.54"]]);
           return (
             '<div class="dk-more" data-prb="' +
             i +
             '" style="margin-bottom:10px">' +
-            [
-              ["id", "Id (letters, digits, _)", "h2c"],
-              ["name", "Name", "H2C"],
-              ["ip", "IP address", "192.168.0.54"],
-            ]
+            fields
               .map(
                 ([k, l, ph]) =>
                   '<div class="field"><label class="field-label">' +
@@ -702,20 +706,44 @@
                   '" spellcheck="false"></div>',
               )
               .join("") +
-            '<div class="field"><label class="field-label">Serial</label><input type="text" id="dkPrS' +
+            '<div class="field"><label class="field-label">Connection</label><select data-prv="' +
             i +
-            '" placeholder="' +
-            (s.secret ? "saved - leave empty to keep" : "printer serial number") +
-            '" autocomplete="off" spellcheck="false"></div>' +
-            '<div class="field"><label class="field-label">Access code</label><input type="password" id="dkPrC' +
-            i +
-            '" placeholder="' +
-            (s.secret ? "saved - leave empty to keep" : "LAN access code") +
-            '" autocomplete="off"></div>' +
+            '">' +
+            opt("lan", "LAN (the deck connects)", !cloud) +
+            opt("cloud", "Bambu Cloud (through a PC agent)", cloud) +
+            "</select></div>" +
+            (cloud
+              ? '<div class="field wide"><label class="field-label">Printer from a PC agent</label>' +
+                (prnAnn.length
+                  ? '<select id="dkPrA' +
+                    i +
+                    '">' +
+                    prnAnn
+                      .map((a) =>
+                        opt(a.serial, a.name + (a.model ? " (" + a.model + ")" : "") + " - from " + a.pc, false),
+                      )
+                      .join("") +
+                    "</select>"
+                  : '<p class="field-hint">No PC agent is sending a printer yet: sign in to Bambu Cloud on the agent\'s settings page (Printers) and pick it there.</p>') +
+                (s.secret ? '<p class="field-hint">A printer is picked: use another to replace it.</p>' : "") +
+                "</div>"
+              : '<div class="field"><label class="field-label">Serial</label><input type="text" id="dkPrS' +
+                i +
+                '" placeholder="' +
+                (s.secret ? "saved - leave empty to keep" : "printer serial number") +
+                '" autocomplete="off" spellcheck="false"></div>' +
+                '<div class="field"><label class="field-label">Access code</label><input type="password" id="dkPrC' +
+                i +
+                '" placeholder="' +
+                (s.secret ? "saved - leave empty to keep" : "LAN access code") +
+                '" autocomplete="off"></div>') +
             '<div class="field wide"><div class="dk-row">' +
-            '<button type="button" class="btn" data-prs="' +
-            i +
-            '">Save serial and code</button><button type="button" class="btn" data-prp="' +
+            (cloud
+              ? prnAnn.length
+                ? '<button type="button" class="btn" data-pra="' + i + '">Use this printer</button>'
+                : ""
+              : '<button type="button" class="btn" data-prs="' + i + '">Save serial and code</button>') +
+            '<button type="button" class="btn" data-prp="' +
             i +
             '">Create printer page</button><button type="button" class="btn btn-danger" data-prx="' +
             i +
@@ -767,6 +795,42 @@
             await api("/api/printers/secret", { method: "POST", body: q });
             $("dkPrS" + i).value = "";
             $("dkPrC" + i).value = "";
+            printersStatus();
+          } catch (e) {
+            alert(e.message);
+          }
+        }),
+    );
+    el.querySelectorAll("[data-prv]").forEach(
+      (x) =>
+        (x.onchange = () => {
+          const d = ps[+x.dataset.prv];
+          if (x.value === "cloud") {
+            d.via = "cloud";
+            delete d.ip;
+          } else {
+            delete d.via;
+            d.ip = d.ip || "";
+          }
+          setDirty(true);
+          renderPrinters();
+        }),
+    );
+    el.querySelectorAll("[data-pra]").forEach(
+      (b) =>
+        (b.onclick = async () => {
+          const i = +b.dataset.pra,
+            d = ps[i],
+            q = new URLSearchParams();
+          q.set("id", d.id);
+          q.set("serial", $("dkPrA" + i).value);
+          if (
+            dirty &&
+            !confirm("Save the deck first, or the device will not know this printer yet. Use this printer anyway?")
+          )
+            return;
+          try {
+            await api("/api/printers/secret", { method: "POST", body: q });
             printersStatus();
           } catch (e) {
             alert(e.message);
@@ -3645,7 +3709,10 @@
     const act = (a) => !a || !["toggle", "call-service"].includes(a.action);
     let dropped = 0;
     delete d.led;
-    if (d.printers) d.printers = d.printers.map((x) => ({ id: x.id, name: x.name, ip: x.ip }));
+    if (d.printers)
+      d.printers = d.printers.map((x) =>
+        x.via === "cloud" ? { id: x.id, name: x.name, via: "cloud" } : { id: x.id, name: x.name, ip: x.ip },
+      );
     d.pages.forEach((p) => {
       if (p.when && typeof p.when !== "string") {
         delete p.when;

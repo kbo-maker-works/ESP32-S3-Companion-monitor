@@ -32,8 +32,10 @@ void printersApply(const DeckConfig& cfg) {
       PrinterConn c;
       c.id = d.id;
       c.ip = d.ip;
+      c.cloud = d.cloud;
       readSecret(d.id, c.serial, c.code);
-      if (c.serial.length() && c.code.length()) list.push_back(c);
+      if (c.cloud) c.code = "";  // a PC agent serves it: the serial picks its pushes
+      if (c.serial.length() && (c.cloud || c.code.length())) list.push_back(c);
     }
   }
   printersSet(list);
@@ -57,10 +59,10 @@ bool printerSecretSet(const String& id, const String& serial, const String& code
   return ok;
 }
 
-bool printerHasSecret(const String& id) {
+bool printerHasSecret(const String& id, bool cloud) {
   String serial, code;
   readSecret(id, serial, code);
-  return serial.length() && code.length();
+  return serial.length() && (cloud || code.length());
 }
 
 bool printersPowerSync() {

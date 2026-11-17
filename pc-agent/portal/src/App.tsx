@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, toForm, type Form, type SourceName, type State, type TestName, type TestResult } from "./api";
 import { LogsPage } from "./components/LogsPage";
 import { deckView, Overview, sourceView } from "./components/Overview";
+import { bambuView, PrintersPage } from "./components/PrintersPage";
 import { AtlassianPage, GitLabPage } from "./components/SourcePages";
 import { Dot, type Tone } from "./components/ui";
 
@@ -9,6 +10,7 @@ const PAGES = [
   { id: "overview", label: "Overview", lede: "What the agent is doing right now." },
   { id: "gitlab", label: "GitLab", lede: "Merge requests, reviews, to-dos and pipelines for the Work app." },
   { id: "atlassian", label: "Atlassian", lede: "One account for Jira (board and tickets on the Work app) and Confluence." },
+  { id: "printers", label: "Printers", lede: "Bambu Lab printers through Bambu Cloud, for the deck's printer pages and tiles." },
   { id: "logs", label: "Logs", lede: "The agent's output, newest at the bottom." },
 ] as const;
 type Page = (typeof PAGES)[number]["id"];
@@ -19,7 +21,7 @@ const pageFromHash = (): Page => {
 };
 
 function overallTone(s: State): { tone: Tone; text: string } {
-  const views = [deckView(s), sourceView(s, "gitlab"), sourceView(s, "jira")];
+  const views = [deckView(s), sourceView(s, "gitlab"), sourceView(s, "jira"), bambuView(s)];
   if (views.some((v) => v.tone === "bad")) return { tone: "bad", text: "Needs attention" };
   if (views.some((v) => v.tone === "warn")) return { tone: "warn", text: "Starting" };
   if (views.slice(1).every((v) => v.tone === "dim")) return { tone: "dim", text: "Not set up" };
@@ -138,8 +140,9 @@ export default function App() {
         </div>
         <nav className="nav">
           {PAGES.map((p) => {
-            const tone = state && (p.id === "gitlab" || p.id === "atlassian")
-              ? sourceView(state, p.id === "gitlab" ? "gitlab" : "jira").tone
+            const tone = !state ? null
+              : p.id === "gitlab" || p.id === "atlassian" ? sourceView(state, p.id === "gitlab" ? "gitlab" : "jira").tone
+              : p.id === "printers" ? bambuView(state).tone
               : null;
             return (
               <a key={p.id} href={`#${p.id}`} className={`nav-item ${page === p.id ? "active" : ""}`}
@@ -176,6 +179,9 @@ export default function App() {
         {state && form && page === "atlassian" && (
           <AtlassianPage state={state} form={form} set={setForm} onTest={() => test("jira")} testing={testing === "jira"}
             results={{ jira: results.jira, confluence: results.confluence }} />
+        )}
+        {state && page === "printers" && (
+          <PrintersPage state={state} onBambu={(bambu) => setState((s) => s && { ...s, bambu })} />
         )}
         {page === "logs" && <LogsPage />}
       </main>

@@ -202,6 +202,7 @@ struct TileDef {
 
 struct PrinterDef {
   String id, name, ip;
+  bool cloud = false;  // "via": "cloud": a PC agent pushes it (Bambu Cloud), no ip or code
 };
 
 struct PageDef {

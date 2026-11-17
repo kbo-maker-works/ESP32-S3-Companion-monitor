@@ -9,6 +9,8 @@ winrt-Windows.Foundation.Collections>=2.0; sys_platform == "win32"
 winrt-Windows.Media.Control>=2.0; sys_platform == "win32"
 winrt-Windows.Storage.Streams>=2.0; sys_platform == "win32"
 # td_work.py (Work app: GitLab, Jira) needs nothing beyond the standard library
+# td_bambu.py (Bambu printers through Bambu Cloud): its MQTT broker
+paho-mqtt>=2.0
 # td_portal.py (settings page on 127.0.0.1:4213)
 fastapi>=0.110
 uvicorn>=0.29
