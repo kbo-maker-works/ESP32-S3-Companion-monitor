@@ -72,8 +72,12 @@ void qpUpdateStatus(bool force) {
   if (!s_qp.rssi || abs(raw - s_qp.rssi) > 5) s_qp.rssi = (raw / 5) * 5;
   const int rssi = s_qp.rssi;
   setChip(s_qp.wifi, wifi ? String(LV_SYMBOL_WIFI " ") + rssi + " dBm" : String(LV_SYMBOL_WIFI " offline"), wifi);
-  const int pcs = pcOnlineCount();
-  setChip(s_qp.pc, pcs > 1 ? String(pcs) + " PCs online" : pcs ? String("PC online") : String("PC offline"), pcs > 0);
+  // The active PC (tap: Auto -> each PC -> Auto).
+  const PcSource* act = pcActive();
+  char pc[48];
+  if (!act) snprintf(pc, sizeof(pc), "No PC");
+  else snprintf(pc, sizeof(pc), "%s · %.14s", pcActiveMode()[0] ? "Pinned" : "Auto", act->name);
+  setChip(s_qp.pc, pc, act && act->data.online);
   setChip(s_qp.ip, wifi ? WiFi.localIP().toString() : String("-"), wifi);
 }
 
@@ -150,6 +154,11 @@ void onScrim(lv_event_t*) { closePanelAnimated(); }
 
 void onHeaderBtn(lv_event_t*) { setHeader(lv_obj_has_state(s_qp.headerBtn, LV_STATE_CHECKED)); }
 void onEditBtn(lv_event_t*) { edOpen(sh.active); }
+
+void onPcChip(lv_event_t*) {
+  pcCycleActiveMode();
+  qpUpdateStatus(true);
+}
 
 lv_obj_t* qpButton(lv_obj_t* parent, int x, int y, int w, const char* text, bool checkable) {
   lv_obj_t* b = lv_button_create(parent);
@@ -347,6 +356,9 @@ void buildQuickPanel() {
   lv_obj_remove_flag(chips, (lv_obj_flag_t)(LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
   s_qp.wifi = qpChip(chips);
   s_qp.pc = qpChip(chips);
+  lv_obj_add_flag(s_qp.pc, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_ext_click_area(s_qp.pc, 6);
+  lv_obj_add_event_cb(s_qp.pc, onPcChip, LV_EVENT_CLICKED, nullptr);
   s_qp.ip = qpChip(chips);
 
   const int labelW = 108, valW = 46;

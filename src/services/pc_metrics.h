@@ -74,50 +74,6 @@ struct PcState {
 };
 enum : int8_t { PC_MEDIA_STOPPED = 0, PC_MEDIA_PAUSED, PC_MEDIA_PLAYING };
 
-struct PcSource {
-  bool     used;
-  char     id[17];
-  char     name[24];
-  IPAddress ip;          // where its last packet came from
-  uint16_t cmdPort;      // its command listener ("cmd_port"), 0 = none
-  uint16_t artPort;      // cover HTTP server, 0 = unavailable
-  bool     viaSerial;    // its latest packet came over the USB cable
-  char     nonces[4][17];  // one-time nonces from its latest packet, "" = used
-  bool     paired;
-  uint8_t  key[32];      // shared HMAC key from pairing (NVS only, never in the API)
-  PcMetricData data;
-  PcState state;
-  SlotHistory hist[MAX_METRICS + 1];  // by metric id; index 0 stays empty
-};
-
-// MAX_PCS entries, in PSRAM (each holds ~8 KB of history).
-extern PcSource* pcSources;
-
-// Start the UDP listener on UDP_PORT and load the known PCs.
-void pcMetricsBegin();
-// Close the UDP socket until resumed (the daily download needs its RAM); the
-// pause does not count as silence, so no PC goes offline because of it.
-void pcMetricsPause(bool pause);
-// Service the socket: parse any pending packet, refresh the online flags.
-// Returns true if a new packet was parsed this call.
-bool pcMetricsHandle();
-// Re-bind the socket after a WiFi reconnect (old fd goes stale).
-void pcMetricsRestartUdp();
-
-// The PC a tile names: id "" = the default (first known) PC. Null when none.
-PcSource* pcSource(const String& id);
-bool pcAnyOnline();
-int pcOnlineCount();
-// Bumps on every packet and online change of any PC.
-uint32_t pcVersion();
-// Drop a PC from the known list (portal). False when it is not known.
-bool pcForget(const String& id);
-
-// Lookup for the metric tiles. Null when the PC is offline or lacks the id.
-const PcMetric* pcMetricFind(const PcSource* pc, uint8_t id);
-// The PC's reported state; null when it is offline.
-const PcState* pcStateOf(const PcSource* pc);
-
 // --- Claude Code (mascot widget) -------------------------------------------
 // Optional "claude" object in any packet (with or without metrics):
 //   "claude": {"mood": "coding",            // happy|coding|thinking|hyped|sleeping
@@ -149,6 +105,7 @@ struct ClaudeSession {
   char detail[32];  // working: the tool; input: what it waits for
   char state;       // 'w' working, 'i' waiting for you, 'd' turn done, 'z' idle
   uint32_t age;     // seconds in that state when the packet left the PC
+  uint8_t pc;       // pcClaude(): index in pcSources of the PC it runs on
 };
 struct ClaudeLive {
   ClaudeSession sessions[CLAUDE_MAX_SESSIONS];
@@ -165,9 +122,73 @@ struct ClaudeLive {
   uint32_t rxMs;     // millis() of the last packet with a "claude" object, 0 = never
   ClaudeUsage usage;
 };
+
+struct PcSource {
+  bool     used;
+  char     id[17];
+  char     name[24];
+  IPAddress ip;          // where its last packet came from
+  uint16_t cmdPort;      // its command listener ("cmd_port"), 0 = none
+  uint16_t artPort;      // cover HTTP server, 0 = unavailable
+  bool     viaSerial;    // its latest packet came over the USB cable
+  char     nonces[4][17];  // one-time nonces from its latest packet, "" = used
+  bool     paired;
+  uint8_t  key[32];      // shared HMAC key from pairing (NVS only, never in the API)
+  PcMetricData data;
+  PcState state;
+  SlotHistory hist[MAX_METRICS + 1];  // by metric id; index 0 stays empty
+  int32_t  idleS;        // seconds since the PC's last keyboard or mouse input ("idle"), -1 = unknown
+  uint32_t idleRxMs;     // millis() when idleS arrived
+  ClaudeLive claude;     // this PC's Claude Code (its own account and quota)
+};
+
+// MAX_PCS entries, in PSRAM (each holds ~8 KB of history).
+extern PcSource* pcSources;
+
+// Start the UDP listener on UDP_PORT and load the known PCs.
+void pcMetricsBegin();
+// Close the UDP socket until resumed (the daily download needs its RAM); the
+// pause does not count as silence, so no PC goes offline because of it.
+void pcMetricsPause(bool pause);
+// Service the socket: parse any pending packet, refresh the online flags.
+// Returns true if a new packet was parsed this call.
+bool pcMetricsHandle();
+// Re-bind the socket after a WiFi reconnect (old fd goes stale).
+void pcMetricsRestartUdp();
+
+// The PC a tile names: id "" = the active PC. Null when none.
+PcSource* pcSource(const String& id);
+
+// The active PC: what every tile, app and command without its own "pc"
+// follows. Mode "" = Auto: the online PC with the most recent keyboard or
+// mouse input (the agent's "idle"), so the deck follows the computer in use;
+// else the pc_id it is pinned to. Kept in NVS. Null when no PC is known.
+PcSource* pcActive();
+const char* pcActiveMode();
+void pcSetActiveMode(const char* id);
+// Auto -> each known PC -> Auto (the quick panel's chip).
+void pcCycleActiveMode();
+bool pcAnyOnline();
+int pcOnlineCount();
+// Bumps on every packet and online change of any PC.
+uint32_t pcVersion();
+// Drop a PC from the known list (portal). False when it is not known.
+bool pcForget(const String& id);
+
+// Lookup for the metric tiles. Null when the PC is offline or lacks the id.
+const PcMetric* pcMetricFind(const PcSource* pc, uint8_t id);
+// The PC's reported state; null when it is offline.
+const PcState* pcStateOf(const PcSource* pc);
+
+// What the mascot and the IA app show: mood, status and quota from the
+// Claude PC (the active PC while it sends Claude data, else the last one that
+// did), the latest event from any PC, and the sessions of every online PC
+// (the Claude PC's first; ClaudeSession.pc says whose).
 const ClaudeLive& pcClaude();
-// True when a "claude" object arrived within PC_STALE_TIMEOUT_MS.
+// True when the Claude PC's data arrived within PC_STALE_TIMEOUT_MS.
 bool pcClaudeOnline();
+// The Claude PC (null when none ever sent Claude data).
+const PcSource* pcClaudePc();
 
 // --- PC control -------------------------------------------------------------
 // A command goes to the PC's cmd_port as {"pc","cmd","nonce","sig"}, sig =

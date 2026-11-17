@@ -14,7 +14,8 @@ Read only: the only thing ever sent to a printer is a status request. Bambu
 asks third-party software to name itself and to keep its traffic low, so this
 agent sends its own User-Agent and asks for a printer's full status
 ("pushall") on connecting and then only while the printer is idle, every
-5 min: a printing printer pushes its changes by itself. Requests on the cloud
+5 min: a printing printer pushes its changes by itself; one that is off gets
+one every 30 min. Requests on the cloud
 broker's request topic every few seconds get the session refused.
 
 ~/.touchdeck/bambu.json (mode 600, written by the settings page):
@@ -55,6 +56,7 @@ PUSHALL_IDLE_S = 300   # full status while idle; a printing printer pushes by it
 PUSHALL_GAP_S = 120    # never two status requests closer than this (but the one on connecting)
 STALE_JOB_S = 120      # printing and silent this long: one status request to catch up
 SILENT_S = 330         # no report this long: the printer is off or not reporting
+PUSHALL_OFF_S = 1800   # off: one status request this often, in case it is back (it reports by itself on waking)
 PUSH_GAP_S = 3         # to the deck: changes at most this often...
 PUSH_EVERY_S = 60      # ...and this often anyway, so it knows the data is current
 RETRY_S = (30, 60, 120, 300, 600)  # broker reconnects
@@ -709,7 +711,10 @@ class Cloud(threading.Thread):
     def _requests(self):
         """Status requests, sparingly: idle printers every PUSHALL_IDLE_S once they
         have answered (an offline one gets only the request on connecting), a
-        printing one only if it went quiet, and never two within PUSHALL_GAP_S."""
+        printing one only if it went quiet, and never two within PUSHALL_GAP_S.
+        One silent for SILENT_S is off (or was switched off mid-print, its last
+        state still "printing"): only one request every PUSHALL_OFF_S; its
+        first report on waking brings back the normal pace."""
         now = time.time()
         with self.lock:
             due = []
@@ -718,6 +723,10 @@ class Cloud(threading.Thread):
                 if now - last < PUSHALL_GAP_S or not p.rx or p.rx < self.connected_at:
                     continue
                 quiet = now - p.rx
+                if quiet > SILENT_S:
+                    if now - last >= PUSHALL_OFF_S:
+                        due.append(p.serial)
+                    continue
                 if (not p.printing() and now - last >= PUSHALL_IDLE_S) or (p.printing() and quiet >= STALE_JOB_S):
                     due.append(p.serial)
         for serial in due:

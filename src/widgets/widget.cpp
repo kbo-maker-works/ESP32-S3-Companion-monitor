@@ -1096,17 +1096,19 @@ struct State {
   bool relayout = true;
 };
 
-// The tile's PC, else the first one online; for batteries, the first online
-// one that reports any (a desktop has none of its own).
+// The tile's PC, else the active one while online; for batteries, the first
+// online one that reports any (a desktop has none of its own).
 const PcSource* pick(const State* s) {
   if (s->pc.length()) return pcSource(s->pc);
   if (!pcSources) return nullptr;
+  const PcSource* act = pcActive();
+  if (act && act->data.online && (!s->batteries || act->state.battCount)) return act;
   for (int pass = s->batteries ? 0 : 1; pass < 2; pass++)
     for (int i = 0; i < MAX_PCS; i++) {
       const PcSource& c = pcSources[i];
       if (c.used && c.data.online && (pass || c.state.battCount)) return &c;
     }
-  return pcSources[0].used ? &pcSources[0] : nullptr;
+  return act;
 }
 
 // The PC's last value of a metric, online or not; NAN when it never sent it.

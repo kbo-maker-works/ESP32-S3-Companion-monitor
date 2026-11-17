@@ -47,6 +47,7 @@
               '"><b>' +
               esc(n.ssid) +
               "</b><small>" +
+              (saved.some((x) => x.ssid === n.ssid) ? "saved " : "") +
               bars(n.rssi) +
               (n.secure ? " 🔒" : "") +
               "</small></button>",
@@ -60,6 +61,43 @@
         f.dispatchEvent(new Event("input", { bubbles: true }));  // the save bar sees it
         qa(".chip.net", tray).forEach((x) => x.classList.toggle("on", x === b));
         $("wifiPass").focus();
+      }),
+    );
+  }
+  // Saved networks (home, office...): the deck joins the strongest one around.
+  let saved = [];
+  function showSaved(list) {
+    saved = list;
+    const box = $("wifiSaved");
+    if (!box) return;
+    box.hidden = !list.length;
+    $("wifiSavedList").innerHTML = list
+      .map(
+        (n) =>
+          '<span class="chip saved' +
+          (n.now ? " on" : "") +
+          '"><b>' +
+          esc(n.ssid) +
+          "</b><small>" +
+          (n.now ? "connected" : "saved") +
+          "</small>" +
+          (list.length > 1
+            ? '<button type="button" class="chip-x" title="Forget" data-forget="' + esc(n.ssid) + '">×</button>'
+            : "") +
+          "</span>",
+      )
+      .join("");
+    qa("[data-forget]", box).forEach((b) =>
+      b.addEventListener("click", async () => {
+        const ssid = b.dataset.forget;
+        if (!confirm('Forget "' + ssid + '"? The deck will not join it again until you save it.')) return;
+        try {
+          await getJson("/api/wifi/forget?ssid=" + encodeURIComponent(ssid), { method: "POST" });
+          showSaved(saved.filter((x) => x.ssid !== ssid));
+          showToast("Network forgotten");
+        } catch (e) {
+          showToast(e.message, true);
+        }
       }),
     );
   }
@@ -597,6 +635,7 @@
     const tz = qa("#timezonePreset option").find((o) => o.value === (c.clock.timezone || ""));
     setVal("timezonePreset", tz ? tz.value : "");
     setVal("wifiSsid", c.network.ssid || "");
+    showSaved(c.network.saved || []);
     setVal("wifiPass", "");
     setVal("hostname", c.network.hostname || "touchdeck");
     setCheck("mdns", c.network.mdns);

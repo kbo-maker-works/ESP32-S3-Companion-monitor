@@ -18,6 +18,8 @@ PcSource* pcSources = nullptr;
 
 static WiFiUDP udp;
 static uint32_t s_version = 1;
+static char s_mode[17] = "";  // pcActiveMode(): "" = Auto, else a pc_id
+static int s_active = 0;      // pcActive()'s index in pcSources
 
 static void toHex(const uint8_t* b, size_t n, char* out) {
   static const char* h = "0123456789abcdef";
@@ -86,8 +88,16 @@ static void loadKnown() {
 void pcMetricsBegin() {
   pcSources = (PcSource*)heap_caps_calloc(MAX_PCS, sizeof(PcSource), MALLOC_CAP_SPIRAM);
   if (!pcSources) pcSources = (PcSource*)calloc(MAX_PCS, sizeof(PcSource));
-  for (int i = 0; i < MAX_PCS; i++) pcSources[i].data.status = PC_STATUS_OK;
+  for (int i = 0; i < MAX_PCS; i++) {
+    pcSources[i].data.status = PC_STATUS_OK;
+    pcSources[i].idleS = -1;
+  }
   loadKnown();
+  Preferences p;
+  if (p.begin("deckpc", true)) {
+    strlcpy(s_mode, p.getString("active", "").c_str(), sizeof(s_mode));
+    p.end();
+  }
   udp.begin(UDP_PORT);
   Serial.printf("pc_metrics: UDP listening on port %u\n", (unsigned)UDP_PORT);
 }
@@ -156,6 +166,7 @@ static PcSource* sourceForPacket(const char* id, const char* name) {
   memset(free, 0, sizeof(PcSource));
   free->used = true;
   free->data.status = PC_STATUS_OK;
+  free->idleS = -1;
   strlcpy(free->id, id, sizeof(free->id));
   strlcpy(free->name, name[0] ? name : "PC", sizeof(free->name));
   saveKnown();
@@ -187,16 +198,16 @@ static void handleAck(JsonDocument& doc) {
   }
 }
 
-static ClaudeLive s_claude = {};
+// The latest Claude event from any PC: a session waiting for you on the other
+// computer must still reach the mascot.
+struct ClaudeEvent {
+  char ev[8], evTxt[32], evSub[40];
+  uint32_t seq, rxMs;
+};
+static ClaudeEvent s_event = {};
 
-const ClaudeLive& pcClaude() { return s_claude; }
-
-bool pcClaudeOnline() {
-  return s_claude.rxMs && millis() - s_claude.rxMs < PC_STALE_TIMEOUT_MS;
-}
-
-static void parseClaude(JsonObjectConst c) {
-  ClaudeLive& cl = s_claude;
+static void parseClaude(PcSource* pc, JsonObjectConst c) {
+  ClaudeLive& cl = pc->claude;
   strlcpy(cl.mood, c["mood"] | "", sizeof(cl.mood));
   strlcpy(cl.status, c["status"] | "", sizeof(cl.status));
   const uint32_t id = c["ev_id"] | (uint32_t)0;
@@ -209,6 +220,13 @@ static void parseClaude(JsonObjectConst c) {
     asciiPunct(cl.evSub);
     cl.evRxMs = millis();
     cl.evSeq++;
+    if (cl.ev[0]) {
+      memcpy(s_event.ev, cl.ev, sizeof(s_event.ev));
+      memcpy(s_event.evTxt, cl.evTxt, sizeof(s_event.evTxt));
+      memcpy(s_event.evSub, cl.evSub, sizeof(s_event.evSub));
+      s_event.seq++;
+      s_event.rxMs = cl.evRxMs;
+    }
   }
   asciiPunct(cl.status);
   cl.rxMs = millis();
@@ -283,7 +301,7 @@ static void parsePacket(const char* json, IPAddress from, bool serial) {
   PcMetricData& d = pc->data;
 
   JsonObjectConst claude = doc["claude"];
-  if (!claude.isNull()) parseClaude(claude);
+  if (!claude.isNull()) parseClaude(pc, claude);
   // A Claude-only packet leaves the metrics and the PC state alone.
   if (!claude.isNull() && doc["metrics"].isNull() && doc["pcstate"].isNull()) {
     d.lastReceived = millis();
@@ -296,6 +314,10 @@ static void parsePacket(const char* json, IPAddress from, bool serial) {
   st.vol = ps["vol"].is<int>() ? (int8_t)constrain(ps["vol"].as<int>(), 0, 100) : -1;
   st.mute = ps["mute"].is<bool>() ? (int8_t)ps["mute"].as<bool>() : -1;
   st.awake = ps["awake"].is<bool>() ? (int8_t)ps["awake"].as<bool>() : -1;
+  if (ps["idle"].is<int32_t>()) {
+    pc->idleS = max((int32_t)0, ps["idle"].as<int32_t>());
+    pc->idleRxMs = millis();
+  }
   st.battCount = 0;
   for (JsonVariantConst v : ps["batt"].as<JsonArrayConst>()) {
     if (st.battCount >= PC_MAX_BATTERIES) break;
@@ -452,6 +474,134 @@ void pcMetricsPause(bool pause) {
     if (pcSources[i].used) pcSources[i].data.lastReceived = millis();
 }
 
+// --- Active PC ---------------------------------------------------------------
+// Seconds since the PC's last input now; huge when it does not say (an older
+// agent, Linux), so a PC that reports wins.
+static uint32_t idleNow(const PcSource& pc) {
+  if (pc.idleS < 0 || !pc.idleRxMs) return 0x7FFFFFFF;
+  return (uint32_t)pc.idleS + (millis() - pc.idleRxMs) / 1000;
+}
+
+// The pinned PC while it is known; Auto: the online PC used last, changing
+// only when another one has had input clearly more recently (a few seconds of
+// margin, so two PCs both in use do not flip the deck on every packet). An
+// offline active PC stays active until another one comes online.
+constexpr uint32_t ACTIVE_MARGIN_S = 5;
+
+static void updateActive() {
+  int next = s_active;
+  if (s_mode[0]) {
+    for (int i = 0; i < MAX_PCS; i++)
+      if (pcSources[i].used && !strcmp(pcSources[i].id, s_mode)) next = i;
+  } else {
+    const PcSource& cur = pcSources[s_active];
+    const bool curOn = cur.used && cur.data.online;
+    uint32_t best = curOn ? idleNow(cur) : 0xFFFFFFFF;
+    for (int i = 0; i < MAX_PCS; i++) {
+      const PcSource& pc = pcSources[i];
+      if (i == s_active || !pc.used || !pc.data.online) continue;
+      const uint32_t idle = idleNow(pc);
+      if (!curOn ? idle < best : idle + ACTIVE_MARGIN_S < best) {
+        best = idle;
+        next = i;
+      }
+    }
+  }
+  if (!pcSources[next].used) {
+    for (next = 0; next < MAX_PCS - 1 && !pcSources[next].used;) next++;
+  }
+  if (next == s_active) return;
+  s_active = next;
+  s_version++;
+  Serial.printf("pc_metrics: active PC '%s'%s\n", pcSources[next].name, s_mode[0] ? " (pinned)" : "");
+}
+
+PcSource* pcActive() {
+  if (!pcSources) return nullptr;
+  return pcSources[s_active].used ? &pcSources[s_active] : nullptr;
+}
+
+const char* pcActiveMode() { return s_mode; }
+
+void pcSetActiveMode(const char* id) {
+  if (!strcmp(id ? id : "", s_mode)) return;
+  strlcpy(s_mode, id ? id : "", sizeof(s_mode));
+  Preferences p;
+  if (p.begin("deckpc", false)) {
+    p.putString("active", s_mode);
+    p.end();
+  }
+  s_version++;
+  if (pcSources) updateActive();
+}
+
+void pcCycleActiveMode() {
+  if (!pcSources) return;
+  int at = -1;  // Auto
+  for (int i = 0; s_mode[0] && i < MAX_PCS; i++)
+    if (pcSources[i].used && !strcmp(pcSources[i].id, s_mode)) at = i;
+  for (int i = at + 1; i < MAX_PCS; i++)
+    if (pcSources[i].used) return pcSetActiveMode(pcSources[i].id);
+  pcSetActiveMode("");
+}
+
+// --- What the mascot and the IA app show ------------------------------------
+static bool claudeFresh(const PcSource& pc) {
+  return pc.used && pc.claude.rxMs && millis() - pc.claude.rxMs < PC_STALE_TIMEOUT_MS;
+}
+
+const PcSource* pcClaudePc() {
+  if (!pcSources) return nullptr;
+  const PcSource* act = pcActive();
+  if (act && claudeFresh(*act)) return act;
+  const PcSource* last = nullptr;
+  for (int i = 0; i < MAX_PCS; i++) {
+    const PcSource& pc = pcSources[i];
+    if (pc.used && pc.claude.rxMs && (!last || (int32_t)(pc.claude.rxMs - last->claude.rxMs) > 0)) last = &pc;
+  }
+  return last ? last : act;
+}
+
+bool pcClaudeOnline() {
+  const PcSource* pc = pcClaudePc();
+  return pc && claudeFresh(*pc);
+}
+
+const ClaudeLive& pcClaude() {
+  static ClaudeLive out;
+  static uint32_t builtFor = 0;
+  static uint32_t builtAt = 0;
+  // Rebuilt on new data; the session ages count from sessionsRxMs, so a
+  // copy a moment old still shows the right ones.
+  if (builtFor == s_version && builtAt && millis() - builtAt < 1000) return out;
+  builtFor = s_version;
+  builtAt = millis();
+  const PcSource* main = pcClaudePc();
+  if (main) out = main->claude;
+  else memset(&out, 0, sizeof(out));
+  memcpy(out.ev, s_event.ev, sizeof(out.ev));
+  memcpy(out.evTxt, s_event.evTxt, sizeof(out.evTxt));
+  memcpy(out.evSub, s_event.evSub, sizeof(out.evSub));
+  out.evSeq = s_event.seq;
+  out.evRxMs = s_event.rxMs;
+  // Every online PC's sessions, the Claude PC's first; ages re-based to now.
+  const uint32_t now = millis();
+  out.sessionCount = 0;
+  out.sessionsRxMs = now;
+  for (int pass = 0; pass < 2 && pcSources; pass++)
+    for (int i = 0; i < MAX_PCS; i++) {
+      const PcSource& pc = pcSources[i];
+      if ((&pc == main) != (pass == 0) || !claudeFresh(pc)) continue;
+      for (int k = 0; k < pc.claude.sessionCount && out.sessionCount < CLAUDE_MAX_SESSIONS; k++) {
+        ClaudeSession& s = out.sessions[out.sessionCount++];
+        s = pc.claude.sessions[k];
+        s.age += (now - pc.claude.sessionsRxMs) / 1000;
+        s.pc = (uint8_t)i;
+      }
+    }
+  return out;
+}
+
 bool pcMetricsHandle() {
   bool parsed = serialPoll();
   int packetSize = s_paused ? 0 : udp.parsePacket();
@@ -481,6 +631,8 @@ bool pcMetricsHandle() {
     s_pending.erase(s_pending.begin() + i);
   }
 
+  updateActive();
+
   // Liveness: drop to offline when no packet has arrived for the stale window.
   for (int i = 0; i < MAX_PCS; i++) {
     PcMetricData& d = pcSources[i].data;
@@ -495,7 +647,7 @@ bool pcMetricsHandle() {
 
 PcSource* pcSource(const String& id) {
   if (!pcSources) return nullptr;
-  if (!id.length()) return pcSources[0].used ? &pcSources[0] : nullptr;
+  if (!id.length()) return pcActive();
   for (int i = 0; i < MAX_PCS; i++)
     if (pcSources[i].used && id == pcSources[i].id) return &pcSources[i];
   return nullptr;
@@ -517,6 +669,10 @@ bool pcForget(const String& id) {
     // Keep the order (the first one is the default): close the gap.
     for (int j = i; j + 1 < MAX_PCS; j++) memcpy(&pcSources[j], &pcSources[j + 1], sizeof(PcSource));
     memset(&pcSources[MAX_PCS - 1], 0, sizeof(PcSource));
+    pcSources[MAX_PCS - 1].idleS = -1;
+    if (s_active > i) s_active--;
+    else if (s_active == i) s_active = 0;
+    if (id == s_mode) pcSetActiveMode("");
     saveKnown();
     s_version++;
     return true;

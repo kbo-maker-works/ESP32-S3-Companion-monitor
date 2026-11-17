@@ -208,6 +208,13 @@ class Awake:
         self.set(on=not self.on)
         return True, ""
 
+    def idle(self):
+        """Whole seconds since the last keyboard or mouse input; None if unknown."""
+        try:
+            return int(self.os.idle()) if self.os else None
+        except Exception:
+            return None
+
     def ask_permission(self):
         ok = self.os.ask() if self.os else False
         self.wake.set()

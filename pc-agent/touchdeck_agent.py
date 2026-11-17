@@ -616,6 +616,11 @@ class PcSide:
                 state.update(vol=vol, mute=mute)
         if self.awake:
             state["awake"] = self.awake.on
+            # Seconds since the last keyboard or mouse input: with two PCs the
+            # deck follows the one in use (its Auto active PC).
+            idle = self.awake.idle()
+            if idle is not None:
+                state["idle"] = idle
         batt = self.batteries.get() if self.batteries else None
         if batt:
             state["batt"] = batt

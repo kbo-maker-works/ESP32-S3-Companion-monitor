@@ -3,6 +3,7 @@
 #include "ui/display_ui.h"
 #include "config.h"
 #include "network/improv_setup.h"
+#include "network/wifi_known.h"
 #include <WiFi.h>
 #include <DNSServer.h>
 #include <ESPmDNS.h>
@@ -147,9 +148,39 @@ static void startMDNS() {
   }
 }
 
+// Join a saved network. With several saved, a background scan (a few
+// seconds, the UI keeps running) picks the strongest one around;
+// staJoinPending, polled by the connect loops and handleWiFi, then joins it.
+static bool staScanPending = false;
+
+static void staJoinNow() {
+  if (wifiKnownCount() > 1) {
+    WiFi.scanDelete();
+    if (WiFi.scanNetworks(true) != WIFI_SCAN_FAILED) {
+      staScanPending = true;
+      return;
+    }
+    wifiKnownPick(0);
+  }
+  WiFi.begin(wifiSSID, wifiPass);
+}
+
+// Finish a background join once its scan is done. True while it waits.
+static bool staJoinPending() {
+  if (!staScanPending) return false;
+  const int16_t n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_RUNNING) return true;
+  staScanPending = false;
+  wifiKnownPick(n);
+  WiFi.scanDelete();
+  WiFi.begin(wifiSSID, wifiPass);
+  return false;
+}
+
 static void completeWiFiStartup() {
   Serial.printf("WiFi connected! IP: %s\n",
                 WiFi.localIP().toString().c_str());
+  wifiKnownJoined(WiFi.SSID().c_str());
   stopAP();
   apMode = false;
   disconnectTime = 0;
@@ -179,7 +210,7 @@ static void beginStaConnectAttempt() {
   WiFi.setSleep(false);
   WiFi.mode(WIFI_STA);
   applyStaticNetworkConfig();
-  WiFi.begin(wifiSSID, wifiPass);
+  staJoinNow();
 }
 
 void startWiFiDuringSplash() {
@@ -217,12 +248,17 @@ void initWiFi() {
 
       while (WiFi.status() != WL_CONNECTED &&
              millis() - start < WIFI_CONNECT_TIMEOUT) {
+        staJoinPending();
         delay(20);
         displayTick();  // keeps the connecting screen animated
       }
       if (WiFi.status() == WL_CONNECTED) break;
 
       Serial.println("WiFi attempt failed, retrying...");
+      if (staScanPending) {  // the scan never finished: the next attempt starts a new one
+        staScanPending = false;
+        WiFi.scanDelete();
+      }
       WiFi.disconnect(true);
       splashStaStarted = false;
       for (int i = 0; i < 50; i++) {
@@ -271,6 +307,7 @@ static unsigned long reconnectInterval() {
 }
 
 void handleWiFi() {
+  staJoinPending();
   if (apMode) {
     if (dnsServer) dnsServer->processNextRequest();
 
@@ -295,7 +332,7 @@ void handleWiFi() {
     if (!staProbing && now - lastStaProbe >= WIFI_STA_PROBE_INTERVAL && WiFi.softAPgetStationNum() == 0) {
       // Start a non-blocking STA probe; result checked after WIFI_STA_PROBE_CHECK_MS
       Serial.println("AP mode: probing STA connection...");
-      WiFi.begin(wifiSSID, wifiPass);
+      staJoinNow();
       staProbing = true;
       probeStartTime = now;
     } else if (staProbing && now - probeStartTime >= WIFI_STA_PROBE_CHECK_MS) {
@@ -303,6 +340,7 @@ void handleWiFi() {
       if (WiFi.status() == WL_CONNECTED) {
         Serial.printf("STA probe succeeded, IP: %s — leaving AP mode\n",
                       WiFi.localIP().toString().c_str());
+        wifiKnownJoined(WiFi.SSID().c_str());
         stopAP();
         WiFi.mode(WIFI_STA);
         apMode = false;
@@ -362,11 +400,12 @@ void handleWiFi() {
       }
 
       WiFi.disconnect();
-      WiFi.begin(wifiSSID, wifiPass);
+      staJoinNow();
     }
   } else {
     if (disconnectTime > 0) {
       Serial.println("WiFi reconnected!");
+      wifiKnownJoined(WiFi.SSID().c_str());
       startMDNS();  // re-announce; responder may not survive a link drop
     }
     disconnectTime = 0;

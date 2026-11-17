@@ -94,6 +94,7 @@
       const c = await api("/api/config");
       pcm = (c.metrics || []).slice().sort((a, b) => a.id - b.id);
       pcs = c.pcs || [];
+      pcMode = c.pc_mode || "";
       apps = c.apps || [];
       widgets = c.widgets || [];
       if (!ori && c.display) ori = c.display.rotation % 2 ? "landscape" : "portrait";
@@ -104,8 +105,9 @@
       widgets = [];
     }
   }
-  /* Known PCs (first = default); a metric tile's PC and its metric list. */
-  let pcs = [];
+  /* Known PCs; a tile without "pc" follows the active one (pcMode "" = Auto). */
+  let pcs = [],
+    pcMode = "";
   /* Apps a tile can open: [{id, name, icon, ready}] from the firmware (app.cpp). */
   let apps = [];
   /* Widgets a tile can show: [{id, name, app, variants: [{id, name}]}] (widget.cpp). */
@@ -116,7 +118,8 @@
       v = w && (w.variants.find((x) => x.id === t.variant) || w.variants[0]);
     return w ? w.name + (v ? " · " + v.name : "") : "Widget " + (t.widget || "");
   };
-  const pcOf = (t) => pcs.find((x) => x.id === (t.pc || "")) || (!t.pc && pcs[0]) || null;
+  const activePc = () => pcs.find((x) => x.active) || pcs[0] || null;
+  const pcOf = (t) => (t.pc ? pcs.find((x) => x.id === t.pc) || null : activePc());
   const mlist = (t) => {
     const p = pcOf(t);
     return p ? (p.metrics || []).slice().sort((a, b) => a.id - b.id) : pcm;
@@ -128,34 +131,44 @@
       '<select data-pc="' +
       i +
       '">' +
+      '<option value=""' +
+      (t.pc ? "" : " selected") +
+      ">Active PC" +
+      (activePc() ? " (now " + esc(activePc().name) + ")" : "") +
+      "</option>" +
       pcs
         .map(
           (x) =>
             '<option value="' +
             esc(x.id) +
             '"' +
-            (cur === x ? " selected" : "") +
+            (t.pc && cur === x ? " selected" : "") +
             ">" +
             esc(x.name) +
             (x.online ? "" : " (offline)") +
             "</option>",
         )
         .join("") +
-      (cur ? "" : "<option selected>Unknown PC</option>") +
+      (cur || !t.pc ? "" : "<option selected>Unknown PC</option>") +
       "</select>"
     );
   }
   function pcList() {
     if (!pcs.length) return "";
     return (
-      '<p class="field-hint">PCs: ' +
+      '<p class="field-hint">PCs (tiles without their own PC follow the active one; ' +
+      (pcMode ? "pinned" : "Auto: the one you used last") +
+      '): ' +
       pcs
         .map(
-          (x, j) =>
+          (x) =>
             esc(x.name) +
-            (j ? "" : " (default)") +
+            (x.active ? " (active)" : "") +
             " - " +
             (x.online ? "online" : "offline") +
+            (pcMode === x.id
+              ? ' <a href="#" data-apc="">auto</a>'
+              : ' <a href="#" data-apc="' + esc(x.id) + '">pin</a>') +
             ' <a href="#" data-fpc="' +
             esc(x.id) +
             '">forget</a>',
@@ -1198,7 +1211,7 @@
           '<select data-pcp="' +
           i +
           '">' +
-          opt("", "Default PC" + (pcs[0] ? " (" + pcs[0].name + ")" : ""), !tp.pc) +
+          opt("", "Active PC" + (activePc() ? " (now " + activePc().name + ")" : ""), !tp.pc) +
           pcs.map((x) => opt(x.id, x.name + (x.paired ? "" : " - not paired"), tp.pc === x.id)).join("") +
           "</select></div>";
       }
@@ -2781,6 +2794,19 @@
           if (t.type === "metric" && ml.length && !ml.find((y) => y.id === t.metric)) t.metric = ml[0].id;
           setDirty(true);
           renderPage();
+        }),
+    );
+    el.querySelectorAll("[data-apc]").forEach(
+      (x) =>
+        (x.onclick = async (e) => {
+          e.preventDefault();
+          try {
+            await api("/api/pc/active?id=" + encodeURIComponent(x.dataset.apc), { method: "POST" });
+            await loadPc();
+            renderPage();
+          } catch (err) {
+            alert(err.message);
+          }
         }),
     );
     el.querySelectorAll("[data-fpc]").forEach(

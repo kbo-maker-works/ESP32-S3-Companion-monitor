@@ -41,6 +41,9 @@
 #include <WiFi.h>
 #include <time.h>
 #include <algorithm>
+#include "network/wifi_known.h"
+
+static void setWifiFromForm(const String& ssid);
 
 static WebServer server(80);
 
@@ -265,6 +268,14 @@ static void handleApiConfig() {
 
   JsonObject network = doc["network"].to<JsonObject>();
   network["ssid"] = wifiSSID;
+  // Saved networks, the one joined last first; "now" = the one in use.
+  JsonArray saved = network["saved"].to<JsonArray>();
+  const String now = WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String();
+  for (int i = 0; i < wifiKnownCount(); i++) {
+    JsonObject o = saved.add<JsonObject>();
+    o["ssid"] = wifiKnownSsid(i);
+    o["now"] = now == wifiKnownSsid(i);
+  }
   network["hostname"] = netSettings.hostname;
   network["mdns"] = netSettings.mdnsEnabled;
   network["showIp"] = netSettings.showIPAtStartup;
@@ -313,9 +324,12 @@ static void handleApiConfig() {
     }
   }
 
-  // "metrics": the default PC's (older portals), "pcs": every known PC.
+  // "metrics": the active PC's (older portals), "pcs": every known PC;
+  // "pc_mode": "" = Auto, else the pc_id the active PC is pinned to.
   JsonArray metrics = doc["metrics"].to<JsonArray>();
   JsonArray pcs = doc["pcs"].to<JsonArray>();
+  const PcSource* active = pcActive();
+  doc["pc_mode"] = pcActiveMode();
   for (int p = 0; p < MAX_PCS; p++) {
     const PcSource& src = pcSources[p];
     if (!src.used) continue;
@@ -325,11 +339,12 @@ static void handleApiConfig() {
     pc["online"] = src.data.online;
     pc["paired"] = src.paired;
     pc["control"] = src.data.online && src.cmdPort != 0;
+    pc["active"] = &src == active;
     if (src.data.online) pc["ip"] = src.ip.toString();
     JsonArray list = pc["metrics"].to<JsonArray>();
     for (uint8_t i = 0; i < src.data.count; i++) {
       const PcMetric& m = src.data.metrics[i];
-      for (JsonArray a : {list, p == 0 ? metrics : JsonArray()}) {
+      for (JsonArray a : {list, &src == active ? metrics : JsonArray()}) {
         if (a.isNull()) continue;
         JsonObject metric = a.add<JsonObject>();
         metric["id"] = m.id;
@@ -1338,13 +1353,30 @@ static void handleSaveNetwork() {
     strlcpy(next.dns, dns.c_str(), sizeof(next.dns));
   }
 
-  strlcpy(wifiSSID, ssid.c_str(), sizeof(wifiSSID));
-  if (server.hasArg("pass") && server.arg("pass").length() > 0)
-    strlcpy(wifiPass, server.arg("pass").c_str(), sizeof(wifiPass));
+  setWifiFromForm(ssid);
   netSettings = next;
   saveSettings();
   sendJsonMessage(200, true, "Network settings saved. Device is restarting.", true);
   scheduleRestart(1500);
+}
+
+// The network the form names becomes the one to join, and is saved with the
+// others. An empty password keeps the one saved for that network (none for a
+// network not saved yet: an open one).
+static void setWifiFromForm(const String& ssid) {
+  String pass = server.arg("pass");
+  if (!pass.length()) {
+    if (!wifiKnownPass(ssid.c_str(), pass) && ssid == wifiSSID) pass = wifiPass;
+  }
+  strlcpy(wifiSSID, ssid.c_str(), sizeof(wifiSSID));
+  strlcpy(wifiPass, pass.c_str(), sizeof(wifiPass));
+  wifiKnownRemember(wifiSSID, wifiPass);
+}
+
+// POST /api/wifi/forget?ssid= - drop a saved network (not the last one).
+static void handleWifiForget() {
+  const bool ok = wifiKnownForget(server.arg("ssid").c_str());
+  sendJsonMessage(ok ? 200 : 400, ok, ok ? "Network forgotten" : "Not saved, or the only one saved");
 }
 
 // GET /api/wifi/scan[?start=1] -> {"scanning", "networks": [{"ssid", "rssi", "secure"}]}
@@ -1387,9 +1419,7 @@ static void handleSaveWifiLegacy() {
     sendJsonMessage(400, false, "WiFi network name must be 1 to 32 characters.");
     return;
   }
-  strlcpy(wifiSSID, ssid.c_str(), sizeof(wifiSSID));
-  if (server.hasArg("pass") && server.arg("pass").length() > 0)
-    strlcpy(wifiPass, server.arg("pass").c_str(), sizeof(wifiPass));
+  setWifiFromForm(ssid);
   saveSettings();
   sendJsonMessage(200, true, "WiFi settings saved. Device is restarting.", true);
   scheduleRestart(1500);
@@ -1481,6 +1511,8 @@ static void handleApiStatus() {
   doc["pc_online"] = pcAnyOnline();
   doc["pc_status"] = pc0 ? pc0->data.status : PC_STATUS_OK;
   doc["pcs_online"] = pcOnlineCount();
+  doc["pc_active"] = pc0 ? pc0->name : "";
+  doc["pc_mode"] = pcActiveMode();
   doc["backlight"] = currentBacklightLevel();
   doc["night_active"] = nightBrightnessActive();
   doc["night_wake"] = nightWakeActive();
@@ -2363,6 +2395,17 @@ static void handlePcPrinters() {
   sendJsonMessage(200, true, "OK");
 }
 
+// POST /api/pc/active?id=<pc_id> pins the active PC; id "" = Auto.
+static void handlePcActive() {
+  const String id = server.arg("id");
+  if (id.length() && !pcSource(id)) {
+    sendJsonMessage(404, false, "No such PC");
+    return;
+  }
+  pcSetActiveMode(id.c_str());
+  sendJsonMessage(200, true, id.length() ? "PC pinned" : "Auto");
+}
+
 static void handlePcForget() {
   const bool ok = pcForget(server.arg("id"));
   sendJsonMessage(ok ? 200 : 404, ok, ok ? "PC removed" : "No such PC");
@@ -2578,6 +2621,7 @@ void initWebServer() {
   server.on("/portal.js", HTTP_GET, handlePortalJs);
   server.on("/save/wifi", HTTP_POST, handleSaveWifiLegacy);
   server.on("/api/wifi/scan", HTTP_GET, handleWifiScan);
+  server.on("/api/wifi/forget", HTTP_POST, handleWifiForget);
   server.on("/save/display", HTTP_POST, handleSaveDisplay);
   server.on("/save/sd", HTTP_POST, handleSaveSd);
   server.on("/api/sd/format", HTTP_POST, handleSdFormat);
@@ -2609,6 +2653,7 @@ void initWebServer() {
   server.on("/api/deck/card", HTTP_POST, handleDeckCard);
   server.on("/api/deck/tap", HTTP_POST, handleDeckTap);
   server.on("/api/pc/forget", HTTP_POST, handlePcForget);
+  server.on("/api/pc/active", HTTP_POST, handlePcActive);
   server.on("/api/pc/work", HTTP_POST, handlePcWork);
   server.on("/api/pc/printers", HTTP_POST, handlePcPrinters);
   server.on("/api/pc/status", HTTP_GET, handlePcStatus);

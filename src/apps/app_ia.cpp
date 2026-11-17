@@ -178,6 +178,9 @@ void refreshSessions(bool have) {
   setText(s_sessCount, n ? buf : "");
   showObj(s_sessNone, have && !n);
   const uint32_t since = (millis() - c.sessionsRxMs) / 1000;
+  // Sessions from both computers: each says which one it runs on.
+  bool several = false;
+  for (int i = 1; i < n; i++) several |= c.sessions[i].pc != c.sessions[0].pc;
   for (int i = 0; i < CLAUDE_MAX_SESSIONS; i++) {
     SessionRow& r = s_rows[i];
     showObj(r.box, i < n);
@@ -215,7 +218,13 @@ void refreshSessions(bool have) {
     const char* sub = s.detail[0] ? s.detail
                       : s.state == 'i' ? "Waiting for you" : s.state == 'w' ? "Working"
                       : s.state == 'd' ? "Done" : "Idle";
-    setText(r.sub, sub);
+    if (several && pcSources && s.pc < MAX_PCS) {
+      char line[64];
+      snprintf(line, sizeof(line), "%.12s · %s", pcSources[s.pc].name, sub);
+      setText(r.sub, line);
+    } else {
+      setText(r.sub, sub);
+    }
   }
 }
 

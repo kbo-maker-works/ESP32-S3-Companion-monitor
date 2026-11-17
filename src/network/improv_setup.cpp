@@ -1,4 +1,5 @@
 #include "network/improv_setup.h"
+#include "network/wifi_known.h"
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -42,6 +43,7 @@ static void onImprovConnected(const char *ssid, const char *password) {
   strlcpy(wifiSSID, ssid, sizeof(wifiSSID));
   strlcpy(wifiPass, password, sizeof(wifiPass));
   saveSettings();
+  wifiKnownRemember(ssid, password);
   improvSucceeded = true;
 }
 
