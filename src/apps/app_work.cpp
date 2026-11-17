@@ -564,6 +564,6 @@ void workFocus(int tab, int section) {
   if (s) applyFocus();  // already open
 }
 
-const Def kWork = {"work", "Work", "mdi:briefcase-outline", true, open, tick, close};
+const Def kWork = {"work", "Work", "mdi:briefcase-outline", true, open, tick, close, true};
 
 }  // namespace app

@@ -1290,6 +1290,20 @@
               </div>
               <form id="appsForm" class="portal-form" data-endpoint="/save/apps" data-save-label="Save apps">
                 <div class="card">
+                  <h2 class="card-title">PC agent</h2>
+                  <p class="field-hint" style="margin-top:0">
+                    The PC whose agent the deck follows: Claude, metrics, media and commands. Auto takes the one you
+                    used last; the PC chip in the top panel switches it too. An app can keep a PC of its own.
+                  </p>
+                  <div class="grid-2">
+                    <div class="field">
+                      <label class="field-label" for="pcMode">Global</label>
+                      <div class="select-wrap"><select id="pcMode" name="pcMode"></select></div>
+                    </div>
+                  </div>
+                  <div class="grid-2" id="appPcs"></div>
+                </div>
+                <div class="card">
                   <h2 class="card-title">Location</h2>
                   <p class="field-hint" style="margin-top:0">Centre of the radar and place for the top bar weather.</p>
                   <div class="field">

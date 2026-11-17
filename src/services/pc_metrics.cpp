@@ -523,6 +523,76 @@ PcSource* pcActive() {
 
 const char* pcActiveMode() { return s_mode; }
 
+// --- Per-app PC -----------------------------------------------------------------
+struct AppPc {
+  char app[12];
+  char id[17];
+};
+constexpr int MAX_APP_PCS = 8;
+static AppPc s_appPc[MAX_APP_PCS];
+static bool s_appPcLoaded = false;
+
+static void loadAppPcs() {
+  if (s_appPcLoaded) return;
+  s_appPcLoaded = true;
+  Preferences p;
+  String s;
+  if (p.begin("deckpc", true)) {
+    s = p.getString("apppc", "");
+    p.end();
+  }
+  JsonDocument doc;
+  if (!s.length() || deserializeJson(doc, s)) return;
+  int n = 0;
+  for (JsonPairConst kv : doc.as<JsonObjectConst>()) {
+    if (n == MAX_APP_PCS) break;
+    strlcpy(s_appPc[n].app, kv.key().c_str(), sizeof(s_appPc[0].app));
+    strlcpy(s_appPc[n].id, kv.value() | "", sizeof(s_appPc[0].id));
+    if (s_appPc[n].app[0] && s_appPc[n].id[0]) n++;
+  }
+}
+
+const char* pcAppMode(const char* app) {
+  loadAppPcs();
+  for (const AppPc& a : s_appPc)
+    if (a.app[0] && !strcmp(a.app, app)) return a.id;
+  return "";
+}
+
+void pcSetAppMode(const char* app, const char* id) {
+  if (!app || !app[0] || !strcmp(pcAppMode(app), id ? id : "")) return;
+  AppPc* slot = nullptr;
+  for (AppPc& a : s_appPc)
+    if (a.app[0] && !strcmp(a.app, app)) slot = &a;
+  for (AppPc& a : s_appPc)
+    if (!slot && !a.app[0]) slot = &a;
+  if (!slot) return;
+  if (id && id[0]) {
+    strlcpy(slot->app, app, sizeof(slot->app));
+    strlcpy(slot->id, id, sizeof(slot->id));
+  } else {
+    memset(slot, 0, sizeof(*slot));
+  }
+  JsonDocument doc;
+  JsonObject o = doc.to<JsonObject>();
+  for (const AppPc& a : s_appPc)
+    if (a.app[0]) o[a.app] = a.id;
+  String out;
+  serializeJson(doc, out);
+  Preferences p;
+  if (p.begin("deckpc", false)) {
+    p.putString("apppc", out);
+    p.end();
+  }
+  s_version++;
+}
+
+PcSource* pcForApp(const char* app) {
+  const char* id = pcAppMode(app);
+  PcSource* pc = id[0] ? pcSource(id) : nullptr;
+  return pc ? pc : pcActive();
+}
+
 void pcSetActiveMode(const char* id) {
   if (!strcmp(id ? id : "", s_mode)) return;
   strlcpy(s_mode, id ? id : "", sizeof(s_mode));
@@ -552,8 +622,8 @@ static bool claudeFresh(const PcSource& pc) {
 
 const PcSource* pcClaudePc() {
   if (!pcSources) return nullptr;
-  const PcSource* act = pcActive();
-  if (act && claudeFresh(*act)) return act;
+  const PcSource* act = pcForApp("ia");
+  if (act && (claudeFresh(*act) || pcAppMode("ia")[0])) return act;  // an app's own PC: that one only
   const PcSource* last = nullptr;
   for (int i = 0; i < MAX_PCS; i++) {
     const PcSource& pc = pcSources[i];

@@ -305,6 +305,7 @@ static void handleApiConfig() {
     a["name"] = d->name;
     a["icon"] = d->icon;
     a["ready"] = d->ready;
+    if (d->pc) a["pcMode"] = pcAppMode(d->id);  // "" = the active PC
   }
 
   // Widgets a tile can show, with their variants (first = default).
@@ -1299,6 +1300,14 @@ static void handleSaveApps() {
     next.radarKm = (uint8_t)km;
   }
   if (server.hasArg("radarGnd")) next.radarGnd = (uint8_t)constrain(server.arg("radarGnd").toInt(), 0, 2);
+  // The PC agent: pcMode = the global one ("" = Auto), pc_<app> = an app's own.
+  auto knownPc = [](const String& id) { return !id.length() || pcSource(id) != nullptr; };
+  if (server.hasArg("pcMode") && knownPc(server.arg("pcMode"))) pcSetActiveMode(server.arg("pcMode").c_str());
+  for (size_t i = 0; i < app::count(); i++) {
+    const app::Def* d = app::get(i);
+    const String key = String("pc_") + d->id;
+    if (d->pc && server.hasArg(key) && knownPc(server.arg(key))) pcSetAppMode(d->id, server.arg(key).c_str());
+  }
   const bool located = next.lat != companion::settings().lat || next.lon != companion::settings().lon;
   const bool moved = located || next.radarKm != companion::settings().radarKm;
   companion::settings() = next;

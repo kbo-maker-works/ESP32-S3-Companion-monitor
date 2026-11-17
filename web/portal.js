@@ -64,6 +64,36 @@
       }),
     );
   }
+  // Apps page, PC agent: the global PC (Auto or one) and each app's own.
+  function showPcAgent(c) {
+    const pcs = c.pcs || [],
+      name = (p) => esc(p.name) + (p.online ? "" : " (offline)"),
+      opts = (first, cur) =>
+        '<option value="">' +
+        first +
+        "</option>" +
+        pcs.map((p) => '<option value="' + esc(p.id) + '"' + (p.id === cur ? " selected" : "") + ">" + name(p) + "</option>").join("") +
+        (cur && !pcs.some((p) => p.id === cur) ? '<option value="' + esc(cur) + '" selected>Unknown PC</option>' : "");
+    const active = pcs.find((p) => p.active);
+    $("pcMode").innerHTML = opts("Auto" + (active && !c.pc_mode ? " (now " + esc(active.name) + ")" : ""), c.pc_mode || "");
+    $("appPcs").innerHTML = (c.apps || [])
+      .filter((a) => "pcMode" in a)
+      .map(
+        (a) =>
+          '<div class="field"><label class="field-label" for="pc_' +
+          esc(a.id) +
+          '">' +
+          esc(a.name) +
+          '</label><div class="select-wrap"><select id="pc_' +
+          esc(a.id) +
+          '" name="pc_' +
+          esc(a.id) +
+          '">' +
+          opts("Global PC", a.pcMode) +
+          "</select></div></div>",
+      )
+      .join("");
+  }
   // Saved networks (home, office...): the deck joins the strongest one around.
   let saved = [];
   function showSaved(list) {
@@ -624,6 +654,7 @@
       setVal("prnCoolTemp", pr.coolTemp || 35);
     }
     if (window.dkPrnSync) window.dkPrnSync();
+    showPcAgent(c);
     const cp = c.companion || {};
     setVal("city", cp.city || "");
     setVal("lat", cp.lat || "");

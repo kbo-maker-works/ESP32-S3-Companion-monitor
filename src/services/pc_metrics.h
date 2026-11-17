@@ -168,6 +168,13 @@ const char* pcActiveMode();
 void pcSetActiveMode(const char* id);
 // Auto -> each known PC -> Auto (the quick panel's chip).
 void pcCycleActiveMode();
+
+// An app's own PC (the portal's Apps page): "" = it follows the active PC,
+// else the pc_id it always uses. Kept in NVS.
+const char* pcAppMode(const char* app);
+void pcSetAppMode(const char* app, const char* id);
+// The app's PC while it is known, else the active one.
+PcSource* pcForApp(const char* app);
 bool pcAnyOnline();
 int pcOnlineCount();
 // Bumps on every packet and online change of any PC.

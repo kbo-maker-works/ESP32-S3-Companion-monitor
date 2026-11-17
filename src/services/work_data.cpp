@@ -54,6 +54,12 @@ bool workApply(const String& json, IPAddress from, String& err) {
     err = "unknown PC (its agent must be sending metrics)";
     return false;
   }
+  // The Work app has a PC of its own: the others' summaries are not shown.
+  const char* own = pcAppMode("work");
+  if (own[0] && strcmp(own, pc->id) && pcSource(own)) {
+    err = "the Work app shows another PC";
+    return false;
+  }
 
   // Built aside in PSRAM (not on the web server's stack), then copied over.
   if (!s_work) s_work = (WorkData*)heap_caps_calloc(1, sizeof(WorkData), MALLOC_CAP_SPIRAM);

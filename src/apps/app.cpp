@@ -58,6 +58,12 @@ InfoRow infoRow(lv_obj_t* col, const char* name) {
 // (paired; its agent sends a command port), else the first one online.
 const PcSource* agentPc(bool& ready) {
   ready = false;
+  // The app's PC (its own or the active one) while online, else any online one.
+  const PcSource* own = pcForApp("ajustes");
+  if (own && own->data.online && (own->cmdPort || pcAppMode("ajustes")[0])) {
+    ready = own->cmdPort != 0;
+    return own;
+  }
   const PcSource* online = nullptr;
   for (int i = 0; pcSources && i < MAX_PCS; i++) {
     const PcSource& p = pcSources[i];
@@ -168,7 +174,7 @@ void closeInfo() { s_qr = nullptr; }
 const Def kSistema = {"sistema", "System", "mdi:chip", false, openSoon, nullptr, nullptr};
 const Def kRed = {"red", "Network", "mdi:lan", false, openSoon, nullptr, nullptr};
 const Def kAudio = {"audio", "Audio", "mdi:speaker", false, openSoon, nullptr, nullptr};
-const Def kAjustes = {"ajustes", "Settings", "mdi:cog-outline", true, openInfo, tickInfo, closeInfo};
+const Def kAjustes = {"ajustes", "Settings", "mdi:cog-outline", true, openInfo, tickInfo, closeInfo, true};
 
 // --- Registry ------------------------------------------------------------------
 // Order = order in the portal's app list. Apps in their own file (app_radar.cpp)

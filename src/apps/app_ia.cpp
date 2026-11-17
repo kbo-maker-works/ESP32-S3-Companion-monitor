@@ -336,6 +336,6 @@ void close() {
 
 }  // namespace
 
-const Def kIa = {"ia", "AI", "mdi:robot-outline", true, open, tick, close};
+const Def kIa = {"ia", "AI", "mdi:robot-outline", true, open, tick, close, true};
 
 }  // namespace app
