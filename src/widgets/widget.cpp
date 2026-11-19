@@ -1132,7 +1132,9 @@ const char* deviceIcon(char kind) {
     case 'm': return "mdi:mouse";
     case 't': return "mdi:gesture-tap";
     case 'h': return "mdi:headphones";
-    case 'c': return "mdi:earbuds";
+    // MDI has no earbuds case and its earbuds read as the buds themselves: the
+    // case shape from the Reicon pack when it is installed on the card.
+    case 'c': return iconCodepoint("reicon:earbuds-case-filled") ? "reicon:earbuds-case-filled" : "mdi:earbuds";
     case 'g': return "mdi:gamepad-variant";
     case 's': return "mdi:speaker";
     case 'p': return "mdi:cellphone";

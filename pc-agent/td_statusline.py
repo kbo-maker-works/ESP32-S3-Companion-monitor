@@ -42,6 +42,7 @@ from datetime import datetime
 USAGE_DIR = os.path.join(os.path.expanduser("~"), ".claude", "touchdeck", "usage")
 LIMITS_FILE = os.path.join(USAGE_DIR, "limits.json")
 ACCOUNT_CACHE = os.path.join(USAGE_DIR, "account.json")
+LEGACY_FILE = os.path.join(os.path.expanduser("~"), ".claude", "companion_rate_limits.json")
 WINDOWS = ("five_hour", "seven_day")
 
 
@@ -115,6 +116,21 @@ def account():
     return acct
 
 
+def write_legacy(limits, now):
+    """The old ESP32-C3 companion (companion_agent.py) reads the logged-in
+    account's windows from ~/.claude/companion_rate_limits.json."""
+    five, week = limits.get("five_hour") or {}, limits.get("seven_day") or {}
+    data = {"five_hour_pct": five.get("pct"), "five_hour_resets_at": five.get("resets_at"),
+            "week_pct": week.get("pct"), "week_resets_at": week.get("resets_at"), "updated_at": int(now)}
+    old = read_json(LEGACY_FILE) or {}
+    if {k: v for k, v in old.items() if k != "updated_at"} == {k: v for k, v in data.items() if k != "updated_at"}:
+        return
+    fd, tmp = tempfile.mkstemp(prefix=".td.", suffix=".tmp", dir=os.path.dirname(LEGACY_FILE))
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, LEGACY_FILE)
+
+
 def save(payload, now):
     os.makedirs(USAGE_DIR, exist_ok=True)
     acct = account()
@@ -140,6 +156,8 @@ def save(payload, now):
         accounts[aid] = entry
         store["current"] = aid
         write_json(LIMITS_FILE, store)
+    if new:
+        write_legacy(limits, now)
 
     sid = str(payload.get("session_id") or "")
     cw = payload.get("context_window") or {}

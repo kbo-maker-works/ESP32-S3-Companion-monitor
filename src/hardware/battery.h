@@ -13,8 +13,13 @@ bool batteryUpdate();
 // 0..100, or -1 when no battery is connected.
 int batteryPercent();
 
-// A PC powers the board over USB (and so charges the battery).
+// External power charges the battery: a PC on USB, or power seen on the cell
+// (a wall charger, a charge-only cable). False without a battery.
 bool batteryCharging();
+
+// "usb" (a PC on the data lines), "charger" (power seen on the cell),
+// "battery", or "none" (no battery and no PC).
+const char* batteryPowerSource();
 
 // Smoothed battery voltage in mV (0 before the first reading).
 int batteryMillivolts();

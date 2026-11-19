@@ -1540,6 +1540,7 @@ static void handleApiStatus() {
   doc["last_crash"] = lastCrash();
   doc["battery_mv"] = batteryMillivolts();
   doc["battery_pct"] = batteryPercent();
+  doc["battery_power"] = batteryPowerSource();
   doc["wifi_disconnects"]     = wifiDisconnectCount();
   doc["wifi_last_disc_reason"] = wifiLastDisconnectReason();
   doc["metric_count"] = pc0 ? pc0->data.count : 0;
