@@ -12,6 +12,7 @@ struct PcMetric {
   char    name[16];      // short sensor name from the companion ("CPU","GPUT")
   char    unit[8];       // "%", "C", "W", "RPM", "MB", ...
   float   value;
+  float   max;           // optional "max": the full scale the PC knows (RAM / VRAM total), 0 = by unit
 };
 
 // Latest decoded packet + liveness.

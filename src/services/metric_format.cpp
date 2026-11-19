@@ -74,6 +74,9 @@ void formatMetricText(const PcMetric& metric, float raw, MetricText& out) {
 bool metricIsRate(const PcMetric& metric) { return rateUnitIndex(metric.unit) >= 0; }
 
 float metricScaleMax(const PcMetric& metric, uint16_t scaleMax) {
+  // The PC's own full scale ("max", e.g. the VRAM total for VRAM USED in GB)
+  // beats the unit's guess; a scale set on the tile beats both.
+  if (!scaleMax && metric.max > 0) return metric.max;
   switch (metric.unit[0]) {
     case '%': return 100.0f;
     case 'C': return scaleMax ? (float)scaleMax : (float)dispSettings.tempScaleMax;

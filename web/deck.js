@@ -436,8 +436,12 @@
         true,
       );
     const m = t.type === "metric";
+    /* "chartColor" colours whichever the tile draws: its chart line or its bar. */
+    const viz = m && (t.style === "bar" ? "Bar" : t.style === "chart" ? "Chart" : "");
     const what = m
-      ? "the name, and the chart or bar line unless Chart colour is set"
+      ? viz
+        ? "the name, and the " + (viz === "Bar" ? "bar" : "chart line") + " unless " + viz + " colour is set"
+        : "the name"
       : t.type === "slider"
         ? "the icon and the level fill"
         : "the icon";
@@ -449,14 +453,14 @@
       autoCol(t),
       "Colours " + what + "." + (m ? " Auto picks it from the metric." : ""),
     );
-    if (m)
+    if (viz)
       h += colRow(
         t,
         i,
         "chartColor",
-        "Chart colour",
+        viz + " colour",
         t.color || autoCol(t),
-        "The chart or bar line. Auto follows Colour.",
+        (viz === "Bar" ? "The bar's fill." : "The chart line.") + " Auto follows Colour.",
       );
     if (iconTile(t))
       h += colRow(

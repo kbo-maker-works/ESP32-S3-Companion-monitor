@@ -1,6 +1,8 @@
 // Deck UI: page edit mode on the device, and its "+" picker (apps, clock).
 #include "ui/deck_ui_int.h"
 #include "apps/app.h"
+#include <esp_heap_caps.h>
+#include <new>
 
 namespace deckui {
 
@@ -188,12 +190,14 @@ String edTileName(const TileDef& d) {
 void edMakeBox(int k, const TileDef& d);
 
 // --- "+": add a tile ---------------------------------------------------------------
-// What the picker offers, built when it opens: every app of the registry, then
-// the other tile kinds that need no setup. Widgets will join as their own group.
+// What the picker offers, built when it opens: every app of the registry, each
+// powered printer's views, the widgets, then the other tile kinds that need no
+// setup.
 struct PickItem {
   const char* group;
   TileDef def;
-  bool soon;  // an app not written yet
+  bool soon;    // an app not written yet
+  String text;  // the button's text when it isn't def.label (printer views)
 };
 std::vector<PickItem> s_pickItems;
 lv_obj_t* s_pick = nullptr;      // the picker sheet, a child of the editor root
@@ -263,6 +267,46 @@ void pickRowEvent(lv_event_t* e) {
 }
 void pickCloseEvent(lv_event_t*) { pickClose(); }
 
+// One group per powered printer, under its name: its views, trimmed by its
+// last report (a nozzle per side on a dual head, no chamber where it has no
+// sensor, an entry per AMS unit). Before any report, every view.
+void pickPrinters() {
+  PrinterState* st = (PrinterState*)heap_caps_malloc(sizeof(PrinterState), MALLOC_CAP_SPIRAM);
+  if (st) new (st) PrinterState();
+  for (const PrinterDef& p : s_cfg.printers) {
+    if (!printerPowered(p.id)) continue;
+    const bool known = st && printerRead(p.id, *st) && st->lastReportMs;
+    // s_cfg outlives the picker: applying a config closes the editor first.
+    const char* group = p.name.length() ? p.name.c_str() : p.id.c_str();
+    auto add = [&](PrinterShow show, const String& text, uint8_t nozzle = 0, uint8_t unit = 1) {
+      PickItem it = {group, TileDef(), false, text};
+      it.def.type = TILE_PRINTER;
+      it.def.printer = p.id;
+      it.def.show = show;
+      it.def.nozzle = nozzle;
+      it.def.amsUnit = unit;
+      s_pickItems.push_back(it);
+    };
+    add(PS_HERO, printerShowName(PS_HERO));
+    if (known && st->dualNozzle) {
+      add(PS_NOZZLE, "Nozzle L", 1);
+      add(PS_NOZZLE, "Nozzle R", 0);
+    } else {
+      add(PS_NOZZLE, printerShowName(PS_NOZZLE));
+    }
+    add(PS_BED, printerShowName(PS_BED));
+    if (!known || isfinite(st->chamber)) add(PS_CHAMBER, printerShowName(PS_CHAMBER));
+    add(PS_FILAMENT, printerShowName(PS_FILAMENT));
+    add(PS_LAYER, printerShowName(PS_LAYER));
+    add(PS_LIGHT, printerShowName(PS_LIGHT));
+    const int units = known ? min((int)st->amsCount, PRN_AMS_UNITS) : 1;
+    for (int u = 1; u <= units; u++) add(PS_AMS, "AMS " + String(u), 0, (uint8_t)u);
+    add(PS_SLOTS, printerShowName(PS_SLOTS));
+    add(PS_SUMMARY, printerShowName(PS_SUMMARY));
+  }
+  heap_caps_free(st);
+}
+
 void pickBuild() {
   s_pickItems.clear();
   for (size_t i = 0; i < app::count(); i++) {
@@ -275,8 +319,12 @@ void pickBuild() {
     it.def.tap.app = a->id;
     s_pickItems.push_back(it);
   }
+  pickPrinters();
   for (size_t i = 0; i < widget::count(); i++) {
     const widget::Def* w = widget::get(i);
+    // GitLab and Jira, a variant per section or filter, buried the rest of the
+    // list; they stay on the portal's page editor.
+    if (!strcmp(w->id, "gitlab") || !strcmp(w->id, "jira")) continue;
     for (uint8_t v = 0; v < w->variantCount; v++) {
       PickItem it = {"Widgets", TileDef(), false};
       it.def.type = TILE_WIDGET;
@@ -348,7 +396,7 @@ void pickOpen() {
     lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(b, pickRowEvent, LV_EVENT_SHORT_CLICKED, (void*)(uintptr_t)i);
     lv_obj_t* name = lv_label_create(b);
-    lv_label_set_text(name, it.def.label.c_str());
+    lv_label_set_text(name, it.text.length() ? it.text.c_str() : it.def.label.c_str());
     lv_obj_set_style_text_font(name, &deck_font_20, 0);
     lv_label_set_long_mode(name, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_set_width(name, bw - 20);
@@ -605,6 +653,12 @@ bool edBuild(String& out, String& err) {
       tv["type"] = "widget";
       tv["widget"] = d.widget;
       tv["variant"] = d.variant;
+    } else if (d.type == TILE_PRINTER) {
+      tv["type"] = "printer";
+      tv["printer"] = d.printer;
+      tv["show"] = kPrinterShowIds[d.show <= PS_SUMMARY ? d.show : PS_HERO];
+      if (d.show == PS_NOZZLE && d.nozzle) tv["nozzle"] = "left";
+      if (d.show == PS_AMS) tv["unit"] = d.amsUnit;
     } else {
       tv["type"] = "action";
       tv["label"] = d.label;

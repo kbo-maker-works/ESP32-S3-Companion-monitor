@@ -425,6 +425,7 @@ void pcSync(bool force);
 uint32_t showIcon(lv_obj_t* label, const TileDef& d, bool on, int px, uint32_t shown);
 void tileIconColor(TileRt& r);
 String tileLabel(const TileDef& t);
+const char* printerShowName(PrinterShow s);
 String tileSub(const TileRt& r);
 void markPageStale(int page);
 // Fresh image of a page into its swipe buffer (sh.src); false while a gesture owns them.

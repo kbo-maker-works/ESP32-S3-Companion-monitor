@@ -73,6 +73,34 @@ cd pc-agent
 `--host 192.168.1.225` (or `TOUCHDECK_HOST`) sets the deck's address. Without
 it the agent resolves `companion.local` and falls back to a broadcast.
 
+### Start and stop it on demand (Windows)
+
+`windows\touchdeck.cmd` runs the agent in the background with no window
+(pythonw) and logs to `%LOCALAPPDATA%\TouchDeck\agent.log`, which the settings
+page shows under Logs. A double click starts it.
+
+```bat
+windows\touchdeck.cmd start --host 192.168.1.225
+```
+
+- `start`: starts it; nothing if it already runs.
+- `stop`: stops it, however it was started (this script, a console, a shortcut).
+- `restart`: after pulling changes.
+- `status`: running or not, the settings page and the log's path.
+- `settings`: opens the settings page, starting the agent first if needed.
+- `shortcuts`: one shortcut per action (start, stop, restart, settings) in
+  `windows\shortcuts\`, for launchers that pass no arguments, such as Stream
+  Deck's Open: paste the `.lnk` path in its field (choosing it in the file
+  dialog may swap it for the shortcut's target). No window shows when they run.
+- `log`: follows the log; Ctrl+C to leave.
+- `run`: runs it in this console instead (Ctrl+C stops), to see an error the
+  log missed, such as a package that is not installed.
+
+No action is `start`. Anything after the action goes to `touchdeck_agent.py`. Each start keeps the
+previous log as `agent.log.1`. To start it at login too, put a shortcut to
+`touchdeck.cmd` in the Startup folder (`shell:startup`), with Run set to
+Minimized.
+
 ## Claude Code hooks (the mascot)
 
 Claude Code runs the same script as `touchdeck_agent.py hook` on its hook

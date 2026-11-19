@@ -23,3 +23,10 @@ src/network/web_assets.h
 
 # Entorno de Python del agente del PC
 pc-agent/.venv/
+
+# Accesos directos de pc-agent/windows/touchdeck.ps1 shortcuts (rutas de esta máquina)
+pc-agent/windows/shortcuts/
+
+# Restos locales: salida del slicer de Bambu e iconos convertidos para la SD
+result.json
+build_icons/

@@ -90,8 +90,24 @@ void widgetFree(TileRt& r) {
   r.wstate = nullptr;
 }
 
+// The view a printer tile shows, as the portal names it.
+const char* printerShowName(PrinterShow s) {
+  static const char* const kNames[PS_SUMMARY + 1] = {"Progress", "Nozzle", "Bed",   "Chamber",   "Filament",
+                                                     "Layer",    "Light",  "AMS",   "All slots", "Summary"};
+  return s <= PS_SUMMARY ? kNames[s] : "Printer";
+}
+
 String tileLabel(const TileDef& t) {
   if (t.label.length()) return t.label;
+  if (t.type == TILE_PRINTER) {  // "P2S Progress", "H2C Nozzle L", "P2S AMS 2"
+    String name = t.printer;
+    for (const PrinterDef& p : s_cfg.printers)
+      if (p.id == t.printer && p.name.length()) name = p.name;
+    name += String(" ") + printerShowName(t.show);
+    if (t.show == PS_NOZZLE && t.nozzle) name += " L";
+    if (t.show == PS_AMS) name += " " + String(t.amsUnit);
+    return name;
+  }
   if (t.type == TILE_WIDGET) {
     const widget::Def* w = widget::find(t.widget.c_str());
     return w ? String(w->name) : String("Widget");

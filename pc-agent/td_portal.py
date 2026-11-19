@@ -8,7 +8,7 @@ in portal/dist (cd portal && npm install && npm run build) and a small API:
     GET  /api/state    config without tokens, the agent's status
     PUT  /api/config   saves ~/.touchdeck/work.json and reconfigures the worker
     POST /api/test     polls GitLab / Jira with the form, saves nothing
-    GET  /api/logs     the end of the agent's log (macOS service)
+    GET  /api/logs     the end of the agent's log (macOS service, windows/touchdeck.ps1)
     POST /api/bambu/signin, /code, /resend, /restart, /signout, GET /devices,
     PUT  /api/bambu/printers   Bambu Cloud sign-in and printers (td_bambu.py)
 
@@ -37,7 +37,12 @@ PORT = 4213
 HERE = os.path.dirname(os.path.abspath(__file__))
 DIST = os.path.join(HERE, "portal", "dist")
 SESSION_FILE = os.path.join(os.path.dirname(td_work.CONFIG_FILE), "portal.session")
-LOG_FILE = os.path.join(os.path.expanduser("~"), "Library", "Logs", "TouchDeck", "agent.log")
+# Where the agent's output goes when it runs in the background: the macOS
+# LaunchAgent, or windows/touchdeck.ps1 (pythonw, no console, --log).
+if os.name == "nt":
+    LOG_FILE = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "TouchDeck", "agent.log")
+else:
+    LOG_FILE = os.path.join(os.path.expanduser("~"), "Library", "Logs", "TouchDeck", "agent.log")
 COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 

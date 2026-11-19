@@ -9,6 +9,10 @@
 #include <LittleFS.h>
 
 namespace deck {
+
+const char* const kPrinterShowIds[PS_SUMMARY + 1] = {"hero",  "nozzle", "bed", "chamber", "filament",
+                                                      "layer", "light",  "ams", "slots",   "summary"};
+
 namespace {
 
 const char* const CONFIG_PATH = "/deck.json";
@@ -388,11 +392,10 @@ bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err)
           if (err) *err = where + ": unknown printer '" + t.printer + "'";
           return false;
         }
-        static const char* const kShow[] = {"hero", "nozzle", "bed", "chamber", "filament", "layer", "light", "ams", "slots", "summary"};
         const char* sh = tv["show"] | "hero";
         int k = 0;
-        while (k < 10 && strcmp(sh, kShow[k])) k++;
-        if (k == 10) {
+        while (k <= PS_SUMMARY && strcmp(sh, kPrinterShowIds[k])) k++;
+        if (k > PS_SUMMARY) {
           if (err) *err = where + ": unknown show '" + sh + "'";
           return false;
         }

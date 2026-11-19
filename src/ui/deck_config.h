@@ -113,6 +113,8 @@ constexpr int MAX_PAGE_TILES = 24;
 
 enum TileType : uint8_t { TILE_ACTION = 0, TILE_SENSOR, TILE_METRIC, TILE_SLIDER, TILE_CLOCK, TILE_PRINTER, TILE_MEDIA, TILE_WIDGET };
 enum PrinterShow : uint8_t { PS_HERO = 0, PS_NOZZLE, PS_BED, PS_CHAMBER, PS_FILAMENT, PS_LAYER, PS_LIGHT, PS_AMS, PS_SLOTS, PS_SUMMARY };
+// A printer tile's "show" in deck.json, by PrinterShow.
+extern const char* const kPrinterShowIds[PS_SUMMARY + 1];
 constexpr int MAX_PRINTERS = 2;
 enum MetricStyle : uint8_t { METRIC_NUMBER = 0, METRIC_CHART, METRIC_BAR };
 enum ActionKind : uint8_t {

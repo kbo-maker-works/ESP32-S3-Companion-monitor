@@ -390,6 +390,7 @@ static void parsePacket(const char* json, IPAddress from, bool serial) {
     }
 
     m.value = mo["value"] | 0.0f;
+    m.max = mo["max"] | 0.0f;
 
     // Throughput arrives PRE-MULTIPLIED BY TEN. The Windows companion packs
     // NIC readings as an integer number of tenths of a KB/s so one decimal

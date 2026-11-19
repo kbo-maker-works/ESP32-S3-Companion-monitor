@@ -439,7 +439,8 @@ class Gpu:
             if len(vals) < 7 or None in vals[:4]:
                 continue
             util, temp, used, total, power, fan, clock = vals
-            self.values = (util, temp, 100.0 * used / total if total else 0.0, used / 1024.0, power, fan, clock)
+            self.values = (util, temp, 100.0 * used / total if total else 0.0, used / 1024.0, power, fan, clock,
+                           total / 1024.0)
 
 
 class Metrics:
@@ -488,18 +489,20 @@ class Metrics:
         up = (net.bytes_sent - self.net.bytes_sent) / 1024.0 / dt
         self.net, self.net_t = net, t
         # Stable ids: deck tiles bind to them. KB/s go x10 (the firmware divides by 10).
+        # A fifth value is the metric's full scale ("max"), for an amount the
+        # deck can't scale by its unit: a GB bar fills against the total.
         m = [
             (1, "CPU", "%", ps.cpu_percent(interval=None)),
             (2, "RAM", "%", mem.percent),
-            (3, "RAM USED", "GB", mem.used / 1024 ** 3),
+            (3, "RAM USED", "GB", mem.used / 1024 ** 3, mem.total / 1024 ** 3),
             (8, "DISK", "%", self._disk()),
             (9, "DOWN", "KB/s", round(down * 10)),
             (10, "UP", "KB/s", round(up * 10)),
         ]
         if self.gpu.values:
-            util, temp, vram, vram_gb, power, fan, clock = self.gpu.values
+            util, temp, vram, vram_gb, power, fan, clock, vram_total = self.gpu.values
             m += [(4, "GPU", "%", util), (5, "GPUT", "C", temp), (6, "VRAM", "%", vram),
-                  (18, "VRAM USED", "GB", vram_gb)]
+                  (18, "VRAM USED", "GB", vram_gb, vram_total)]
             m += [x for x in ((7, "GPUW", "W", power), (14, "GPU FAN", "%", fan), (15, "GPU CLOCK", "MHz", clock))
                   if x[3] is not None]
         hw = self.hwmon.read() if self.hwmon else {}
@@ -511,7 +514,13 @@ class Metrics:
         if batt is not None:  # laptops: the deck's "PC stats" widget rings it
             m.append((11, "BATT", "%", batt))
         m.sort()
-        return [{"id": i, "name": n, "unit": u, "value": round(float(v), 1)} for i, n, u, v in m]
+        out = []
+        for i, n, u, v, *full in m:
+            o = {"id": i, "name": n, "unit": u, "value": round(float(v), 1)}
+            if full and full[0]:
+                o["max"] = round(float(full[0]), 1)
+            out.append(o)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -796,6 +805,8 @@ def main():
     ap.add_argument("--once", action="store_true", help="build and print one packet, send nothing")
     ap.add_argument("--portal-port", type=int, default=int(os.environ.get("TOUCHDECK_PORTAL_PORT", 4213)),
                     help="settings page on 127.0.0.1 (default 4213, 0 = off)")
+    ap.add_argument("--log", metavar="FILE",
+                    help="append the output to FILE (windows/touchdeck.ps1: pythonw has no console)")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -815,6 +826,11 @@ def main():
         print(url)
         webbrowser.open(url)
         return
+
+    if args.log:  # under pythonw print() would go nowhere, tracebacks included
+        os.makedirs(os.path.dirname(os.path.abspath(args.log)), exist_ok=True)
+        sys.stdout = sys.stderr = open(args.log, "a", encoding="utf-8", buffering=1)
+        print("%s started" % time.strftime("%Y-%m-%d %H:%M:%S"), flush=True)
 
     pc_id, pc_name = pc_identity()
     if args.mode == "pair":

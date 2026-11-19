@@ -39,8 +39,9 @@ export function LogsPage() {
       {error && <p className="t-bad">{error}</p>}
       {logs && !logs.exists && (
         <p className="muted">
-          No log yet. It is written when the agent runs as a macOS service (<code>macos/install.sh</code>); started
-          by hand, the agent prints to its terminal instead.
+          No log yet. It is written when the agent runs in the background: as a macOS service
+          (<code>macos/install.sh</code>) or started with <code>windows\touchdeck.cmd</code> on Windows. Started by
+          hand, the agent prints to its terminal instead.
         </p>
       )}
       {logs && logs.exists && (
