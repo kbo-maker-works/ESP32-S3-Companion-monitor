@@ -43,6 +43,7 @@ void load() {
   if (p.isKey("lon")) s.lon = p.getString("lon", s.lon);
   s.radarKm = p.getUChar("rdr_km", s.radarKm);
   s.radarGnd = p.getUChar("rdr_gnd", s.radarGnd);
+  s.radarLed = p.getBool("rdr_led", s.radarLed);
   p.end();
   if (!validRadarKm(s.radarKm)) s.radarKm = 25;
   if (s.radarGnd > 2) s.radarGnd = 0;
@@ -61,6 +62,7 @@ void save() {
   p.putString("lon", s.lon);
   p.putUChar("rdr_km", s.radarKm);
   p.putUChar("rdr_gnd", s.radarGnd);
+  p.putBool("rdr_led", s.radarLed);
   p.end();
 }
 

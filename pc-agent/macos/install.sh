@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installs the TouchDeck agent as a macOS service (LaunchAgent): it starts at
+# Installs the CompaDeck agent as a macOS service (LaunchAgent): it starts at
 # login, restarts if it stops, and logs to ~/Library/Logs/TouchDeck/agent.log.
 # Run it again after pulling changes: it rebuilds and restarts the agent.
 #

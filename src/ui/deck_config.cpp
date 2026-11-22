@@ -278,6 +278,15 @@ bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err)
     if (!parseWhen(pv["when"], p.when, err, "page '" + p.id + "'")) return false;
     p.autoShow = p.when.kind != WHEN_ALWAYS && (pv["auto"] | false);
     p.home = pv["home"] | false;
+    JsonObjectConst lv = pv["led"].as<JsonObjectConst>();
+    if (!lv.isNull()) {
+      p.ledOwn = true;
+      p.ledFx = (uint8_t)constrain((int)(lv["fx"] | 0), 0, LED_FX_COUNT - 1);
+      p.ledSpeed = (uint8_t)constrain((int)(lv["speed"] | 128), 0, 255);
+      p.ledIntensity = (uint8_t)constrain((int)(lv["intensity"] | 128), 0, 255);
+      parseColor(lv["color"] | (const char*)nullptr, p.ledColor);
+      parseColor(lv["color2"] | (const char*)nullptr, p.ledColor2);
+    }
     parseGrid(pv["layouts"]["landscape"], p.cols[ORIENT_LANDSCAPE], p.rows[ORIENT_LANDSCAPE]);
     parseGrid(pv["layouts"]["portrait"], p.cols[ORIENT_PORTRAIT], p.rows[ORIENT_PORTRAIT]);
     JsonArrayConst tiles = pv["tiles"].as<JsonArrayConst>();

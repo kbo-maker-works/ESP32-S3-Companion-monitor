@@ -1,5 +1,5 @@
 """
-TouchDeck agent: batteries for the deck's "PC stats" widget, Batteries
+CompaDeck agent: batteries for the deck's "PC stats" widget, Batteries
 variants: this computer's own battery and, on macOS, its wireless
 accessories' (keyboards, mice, trackpads, AirPods and their case, headsets,
 game controllers...), what a Mac's Batteries widget shows.

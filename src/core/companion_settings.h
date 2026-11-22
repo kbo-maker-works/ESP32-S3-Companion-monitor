@@ -16,6 +16,7 @@ struct Settings {
   String lon = "-3.7038";
   uint8_t radarKm = 25;     // radar radius: 10, 25, 50 or 100 km
   uint8_t radarGnd = 0;     // radar filter: 0 airborne, 1 on the ground, 2 both
+  bool radarLed = true;     // the radar app sweeps the LED strip in green while open
 };
 
 // Loop task only: the portal and the radar app change it, then call save().

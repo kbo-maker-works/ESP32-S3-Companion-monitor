@@ -1,5 +1,5 @@
 """
-TouchDeck agent: Now playing on macOS for the deck's Now playing tile (title,
+CompaDeck agent: Now playing on macOS for the deck's Now playing tile (title,
 artist, timeline, cover, play/pause/next/previous), with the interface of
 td_pc.Media so the cover server and the deck's commands take it as it is.
 

@@ -29,6 +29,8 @@ bool modalShown() { return s_modalCard != nullptr; }
 // The app open in the card slot, if any (see openApp).
 const app::Def* s_app = nullptr;
 bool appShown() { return s_app != nullptr; }
+bool appKeepsAwake() { return s_app && s_app->awake; }
+const char* openAppId() { return s_app ? s_app->id : ""; }
 
 // The page under a card, dimmed like the scrim, as an opaque picture on top of
 // the screen: LVGL skips the page under it while the card is open.
@@ -261,6 +263,7 @@ void openApp(int tileIdx, const String& id) {
   lv_obj_set_size(body, w, bodyH);
   lv_obj_remove_flag(body, LV_OBJ_FLAG_SCROLLABLE);
 
+  widgetsRelease();  // the memory the app is about to take (the radar widget's pictures)
   s_app = a;
   setModalOpen(true);
   a->open(body, w, bodyH);
@@ -614,13 +617,14 @@ lv_obj_t* s_pairCard = nullptr;
 lv_obj_t* s_pairScrim = nullptr;
 uint32_t s_pairChecked = 0;
 String s_pairName, s_pairCode;
+lv_obj_t* s_askCard = nullptr;  // Claude Code asking, below
 
 void pairClose() {
   if (s_pairCard) lv_obj_delete(s_pairCard);
   if (s_pairScrim) lv_obj_delete(s_pairScrim);
   s_pairCard = s_pairScrim = nullptr;
   s_pairName = s_pairCode = "";
-  setModalOpen(s_modalCard != nullptr);
+  setModalOpen(s_modalCard != nullptr || s_askCard != nullptr);
 }
 
 void onPairCancel(lv_event_t*) {
@@ -705,6 +709,581 @@ void pairSync() {
   lv_obj_set_height(cancel, 44);
   lv_obj_add_event_cb(cancel, onPairCancel, LV_EVENT_CLICKED, nullptr);
   setModalOpen(true);  // no swipes under it
+}
+
+// --- Claude Code asking -----------------------------------------------------------------
+// A permission prompt or a question a Claude Code session waits on (pcClaudeAsk),
+// with its options as buttons. The terminal shows the same dialog meanwhile:
+// whichever answers first wins, and the card goes once the PC stops sending it.
+// A tap closes it at once; it comes back if the PC still asks a while later
+// (the answer got lost). The x hides it until another prompt comes.
+lv_obj_t* s_askScrim = nullptr;
+lv_obj_t* s_askBtn[CLAUDE_ASK_OPTS] = {};
+lv_obj_t* s_askBadge[CLAUDE_ASK_OPTS] = {};  // a question's option numbers (a check once picked)
+String s_askPc;              // whose prompt (pc_id)
+char s_askId[12] = "";
+uint8_t s_askQi = 0, s_askQn = 0;
+char s_askKind = 0;
+bool s_askMulti = false;
+bool s_askLocked = false;    // answered or hidden: no more taps until it goes or is asked again
+uint32_t s_askSerial = 0;    // bumps per card shown, for the delayed close
+lv_obj_t* s_askDot = nullptr;  // the session's dot: where the card's effect starts
+int s_askW = 0, s_askH = 0;  // the screen it was laid out for
+uint32_t s_askShownMs = 0;
+uint32_t s_askChecked = 0;
+uint32_t s_askWoke = 0;      // seq of the last prompt that woke the screen
+// The last one answered or hidden, and when.
+char s_askDoneId[12] = "";
+uint8_t s_askDoneQi = 0;
+uint32_t s_askDoneMs = 0;
+bool s_askHidden = false;
+constexpr uint32_t ASK_ARM_MS = 700;     // a tap under way when it opened must not answer it
+constexpr uint32_t ASK_RETRY_MS = 6000;  // still asked this long after a tap: shown again
+constexpr uint32_t ASK_CLOSE_MS = 220;   // after a tap, so its touch effect shows before the card goes
+constexpr uint32_t C_CLAUDE = 0xD97757;  // Claude's orange
+// The accent, the PC agent portal's green (styles.css --accent, --on-accent), and
+// the text on it; its light variant on Daylight.
+uint32_t askAccent() { return s_theme == THEME_DAYLIGHT ? 0x1F8A5B : 0x36B478; }
+uint32_t askOnAccent() { return s_theme == THEME_DAYLIGHT ? 0xFFFFFF : 0x0C1A12; }
+lv_draw_buf_t* s_askGlass = nullptr;  // Glass theme: the card's frosted background
+
+// keepGlass: another prompt replaces this one at once, over the same screen;
+// a fresh copy now would frost this card instead of the page under it.
+void askClose(bool keepGlass = false) {
+  if (s_askCard) lv_obj_delete(s_askCard);
+  if (s_askScrim) lv_obj_delete(s_askScrim);
+  s_askCard = s_askScrim = nullptr;
+  if (!keepGlass && s_askGlass) {
+    lv_draw_buf_destroy(s_askGlass);
+    s_askGlass = nullptr;
+  }
+  memset(s_askBtn, 0, sizeof(s_askBtn));
+  memset(s_askBadge, 0, sizeof(s_askBadge));
+  s_askDot = nullptr;
+  s_askId[0] = 0;
+  setModalOpen(s_modalCard != nullptr || s_pairCard != nullptr);
+}
+
+// The card goes with the display's card effect backwards.
+void askCloseFx() {
+  if (s_askCard) fxPromptClose(s_askCard, [] { askClose(); });
+}
+
+void askDone(bool hidden) {
+  strlcpy(s_askDoneId, s_askId, sizeof(s_askDoneId));
+  s_askDoneQi = s_askQi;
+  s_askDoneMs = millis();
+  s_askHidden = hidden;
+  s_askLocked = true;
+  // Another question of the same prompt comes in its place: the card stays.
+  if (!hidden && s_askKind == 'q' && s_askQi + 1 < s_askQn) return;
+  if (hidden) {
+    lv_async_call([](void*) { askCloseFx(); }, nullptr);  // runs in the button's own event
+    return;
+  }
+  lv_timer_t* t = lv_timer_create(
+      [](lv_timer_t* t) {
+        if ((uint32_t)(uintptr_t)lv_timer_get_user_data(t) == s_askSerial) askCloseFx();
+      },
+      ASK_CLOSE_MS, (void*)(uintptr_t)s_askSerial);
+  lv_timer_set_repeat_count(t, 1);
+}
+
+bool askArmed() { return !s_askLocked && millis() - s_askShownMs >= ASK_ARM_MS; }
+
+void askSend(const char* choice) {
+  char cmd[40];
+  snprintf(cmd, sizeof(cmd), "claude:%s:%u:%s", s_askId, (unsigned)s_askQi, choice);
+  String err;
+  hapticTap();
+  if (!pcSendCommand(s_askPc, cmd, err)) {
+    deckToastShow(("Can't answer: " + err).c_str(), 2500);
+    return;  // the card stays for another try
+  }
+  askDone(false);
+}
+
+void onAskOption(lv_event_t* e) {
+  if (!askArmed()) return;
+  const int i = (int)(intptr_t)lv_event_get_user_data(e);
+  if (s_askMulti) {  // toggled here, not by LVGL: an early tap must not flip it
+    lv_obj_t* b = s_askBtn[i];
+    const bool checked = !lv_obj_has_state(b, LV_STATE_CHECKED);
+    if (checked) lv_obj_add_state(b, LV_STATE_CHECKED);
+    else lv_obj_remove_state(b, LV_STATE_CHECKED);
+    if (s_askBadge[i]) {
+      if (checked) lv_label_set_text(s_askBadge[i], LV_SYMBOL_OK);
+      else lv_label_set_text_fmt(s_askBadge[i], "%d", i + 1);
+    }
+    hapticTap();
+    return;
+  }
+  char choice[4];
+  snprintf(choice, sizeof(choice), "%d", i);
+  if (s_askBtn[i]) lv_obj_add_state(s_askBtn[i], LV_STATE_CHECKED);  // the pick, in the accent
+  askSend(choice);
+  if (!s_askLocked && s_askBtn[i]) lv_obj_remove_state(s_askBtn[i], LV_STATE_CHECKED);  // not sent
+}
+
+void onAskSend(lv_event_t*) {
+  if (!askArmed()) return;
+  char choice[16] = "";
+  for (int i = 0; i < CLAUDE_ASK_OPTS; i++) {
+    if (!s_askBtn[i] || !lv_obj_has_state(s_askBtn[i], LV_STATE_CHECKED)) continue;
+    const size_t n = strlen(choice);
+    snprintf(choice + n, sizeof(choice) - n, n ? ",%d" : "%d", i);
+  }
+  if (!choice[0]) {
+    deckToastShow("Pick at least one", 1500);
+    return;
+  }
+  askSend(choice);
+}
+
+void onAskHide(lv_event_t*) {
+  if (askArmed()) askDone(true);
+}
+
+lv_obj_t* askLabel(lv_obj_t* parent, const char* text, const lv_font_t* font, uint32_t color) {
+  lv_obj_t* l = lv_label_create(parent);
+  lv_label_set_text(l, text);
+  lv_obj_set_width(l, lv_pct(100));
+  lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_WRAP);
+  lv_obj_set_style_text_font(l, font, 0);
+  lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+  return l;
+}
+
+// Glass: the cards' light edge (portal Display, Claude cards), none at 0 %.
+void askFrameStyle(lv_obj_t* o) {
+  lv_obj_set_style_border_width(o, dispSettings.askFrame ? GLASS_BORDER_WIDTH : 0, 0);
+  lv_obj_set_style_border_color(o, lv_color_hex(dispSettings.askFrameColor), 0);
+  lv_obj_set_style_border_opa(o, (lv_opa_t)(dispSettings.askFrame * 255 / 100), 0);
+}
+
+// Glass: a button's glass, as dark as the tiles' but never under 40 %, so
+// light text reads on any picture.
+lv_opa_t askButtonOpa() { return (lv_opa_t)(std::max<int>(dispSettings.glassTint, 40) * 255 / 100); }
+
+// A button's colours. Glass: as the theme's tiles, tinted glass with a light
+// edge, and the accent (picked, or the main one) at the "on" opacity.
+void askFace(lv_obj_t* b, bool main) {
+  const bool glass = s_askGlass != nullptr;
+  lv_obj_set_style_bg_color(b, lv_color_hex(main ? askAccent() : glass ? C_TILE : C_BUTTON), 0);
+  lv_obj_set_style_bg_color(b, lv_color_hex(askAccent()), LV_STATE_CHECKED);
+  lv_obj_set_style_text_color(b, lv_color_hex(main ? askOnAccent() : C_TEXT), 0);
+  lv_obj_set_style_text_color(b, lv_color_hex(askOnAccent()), LV_STATE_CHECKED);
+  if (!glass) return;
+  const lv_opa_t on = (lv_opa_t)(dispSettings.glassOn * 255 / 100);
+  lv_obj_set_style_bg_opa(b, main ? on : askButtonOpa(), 0);
+  lv_obj_set_style_bg_opa(b, on, LV_STATE_CHECKED);
+  askFrameStyle(b);
+}
+
+// A button as tall as its text: the label, and a dimmer line under it.
+lv_obj_t* askButton(lv_obj_t* parent, const char* text, const char* sub, bool main) {
+  lv_obj_t* b = lv_button_create(parent);
+  lv_obj_set_style_radius(b, 14, 0);
+  lv_obj_set_style_shadow_width(b, 0, 0);
+  lv_obj_set_style_pad_hor(b, 10, 0);
+  lv_obj_set_style_pad_ver(b, 10, 0);
+  lv_obj_set_style_pad_row(b, 2, 0);
+  lv_obj_set_style_min_height(b, 44, 0);
+  lv_obj_set_height(b, LV_SIZE_CONTENT);
+  askFace(b, main);
+  lv_obj_set_flex_flow(b, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(b, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_remove_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t* l = lv_label_create(b);
+  lv_label_set_text(l, text);
+  lv_obj_set_width(l, lv_pct(100));
+  lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_WRAP);
+  lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+  if (sub && sub[0]) {
+    lv_obj_t* s = lv_label_create(b);
+    lv_label_set_text(s, sub);
+    lv_obj_set_width(s, lv_pct(100));
+    lv_label_set_long_mode(s, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_style_text_align(s, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(s, &deck_font_12, 0);
+    lv_obj_set_style_text_opa(s, LV_OPA_70, 0);
+  }
+  return b;
+}
+
+// A header in capitals: ASCII, and the Latin-1 letters the deck's fonts have
+// ("Elección" -> "ELECCIÓN").
+String askUpper(const char* s) {
+  String out;
+  for (const uint8_t* p = (const uint8_t*)s; *p; p++) {
+    out += (char)(*p >= 'a' && *p <= 'z' ? *p - 32 : *p);
+    if (*p == 0xC3 && p[1] >= 0xA0 && p[1] <= 0xBE && p[1] != 0xB7) {  // U+00E0..00FE but the ÷
+      out += (char)(p[1] - 0x20);
+      p++;
+    }
+  }
+  return out;
+}
+
+// A big choice: an optional chip (a question's number), the label and a
+// dimmer line under it. Side by side in a row; stacked in a grid cell.
+lv_obj_t* askChoice(lv_obj_t* parent, const char* text, const char* sub, const char* chip, bool cell, int width,
+                    int minH, const lv_font_t* font, bool main, lv_obj_t** chipLabel = nullptr) {
+  lv_obj_t* b = lv_button_create(parent);
+  lv_obj_set_style_radius(b, 14, 0);
+  lv_obj_set_style_shadow_width(b, 0, 0);
+  lv_obj_set_style_pad_hor(b, 12, 0);
+  lv_obj_set_style_pad_ver(b, 10, 0);
+  lv_obj_set_style_pad_column(b, 12, 0);
+  lv_obj_set_style_pad_row(b, 6, 0);
+  lv_obj_set_size(b, width, LV_SIZE_CONTENT);
+  lv_obj_set_style_min_height(b, minH, 0);
+  askFace(b, main);
+  fxTouchBind(b);  // the display's touch effect, as on the tiles
+  lv_obj_set_flex_flow(b, cell ? LV_FLEX_FLOW_COLUMN : LV_FLEX_FLOW_ROW);
+  if (cell) lv_obj_set_flex_align(b, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+  else lv_obj_set_flex_align(b, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_remove_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+
+  if (chip) {
+    lv_obj_t* c = lv_obj_create(b);
+    lv_obj_remove_style_all(c);
+    lv_obj_set_size(c, 26, 26);
+    lv_obj_set_style_radius(c, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(c, lv_color_hex(C_TILE), 0);
+    lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(c, LV_OBJ_FLAG_CLICKABLE);  // the tap is the button's
+    lv_obj_remove_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t* n = lv_label_create(c);
+    lv_label_set_text(n, chip);
+    lv_obj_set_style_text_font(n, &deck_font_14, 0);
+    lv_obj_set_style_text_color(n, lv_color_hex(askAccent()), 0);
+    lv_obj_center(n);
+    if (chipLabel) *chipLabel = n;
+  }
+
+  lv_obj_t* col = lv_obj_create(b);
+  lv_obj_remove_style_all(col);
+  lv_obj_set_height(col, LV_SIZE_CONTENT);
+  if (cell) lv_obj_set_width(col, lv_pct(100));
+  else lv_obj_set_flex_grow(col, 1);
+  lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_row(col, 2, 0);
+  lv_obj_remove_flag(col, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_remove_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t* l = lv_label_create(col);
+  lv_label_set_text(l, text);
+  lv_obj_set_width(l, lv_pct(100));
+  lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_WRAP);
+  lv_obj_set_style_text_font(l, font, 0);
+  if (sub && sub[0]) {
+    lv_obj_t* d = lv_label_create(col);
+    lv_label_set_text(d, sub);
+    lv_obj_set_width(d, lv_pct(100));
+    lv_label_set_long_mode(d, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_style_text_font(d, &deck_font_12, 0);
+    lv_obj_set_style_text_opa(d, LV_OPA_70, 0);
+  }
+  return b;
+}
+
+// Both cards take the whole screen: on the side (on top when the screen
+// stands upright) whose session and what it asks, then Hide; beside it the
+// choices as big buttons. Glass: the screen under it, frosted, as an app's.
+lv_obj_t* askRoot(int w, int h) {
+  lv_obj_t* c = lv_obj_create(lv_layer_top());
+  s_askCard = c;
+  lv_obj_remove_style_all(c);
+  lv_obj_set_size(c, w, h);
+  lv_obj_set_style_bg_color(c, lv_color_hex(C_PANEL), 0);
+  lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
+  const int bg = dispSettings.askBg == ASK_BG_TILES ? dispSettings.glassTint : dispSettings.askBg;
+  if (s_theme == THEME_GLASS && (s_askGlass || (s_askGlass = frostedCopy(0, 0, w, h, 0, bg)))) {
+    frostStyle(c, s_askGlass);
+    askFrameStyle(c);
+  }
+  lv_obj_set_style_text_color(c, lv_color_hex(C_TEXT), 0);
+  lv_obj_set_flex_flow(c, w >= h ? LV_FLEX_FLOW_ROW : LV_FLEX_FLOW_COLUMN);
+  lv_obj_add_flag(c, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_remove_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+  return c;
+}
+
+// The side: the session's dot and name, then "SUB" in small capitals. On
+// Glass a darker pane of the same glass.
+lv_obj_t* askSide(lv_obj_t* c, const String& who, const String& sub, int sw, int sh) {
+  lv_obj_t* side = lv_obj_create(c);
+  lv_obj_remove_style_all(side);
+  lv_obj_set_size(side, sw, sh);
+  lv_obj_set_style_bg_color(side, lv_color_hex(C_BG), 0);
+  lv_obj_set_style_bg_opa(side, s_askGlass ? LV_OPA_40 : LV_OPA_COVER, 0);
+  lv_obj_set_style_pad_all(side, 14, 0);
+  lv_obj_set_style_pad_bottom(side, 4, 0);
+  lv_obj_set_style_pad_row(side, 6, 0);
+  lv_obj_set_flex_flow(side, LV_FLEX_FLOW_COLUMN);
+  lv_obj_remove_flag(side, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* top = lv_obj_create(side);
+  lv_obj_remove_style_all(top);
+  lv_obj_set_size(top, lv_pct(100), LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(top, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(top, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(top, 6, 0);
+  lv_obj_remove_flag(top, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t* dot = lv_obj_create(top);
+  lv_obj_remove_style_all(dot);
+  lv_obj_set_size(dot, 8, 8);
+  lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(dot, lv_color_hex(C_CLAUDE), 0);
+  lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+  s_askDot = dot;
+  lv_obj_t* name = lv_label_create(top);
+  lv_label_set_text(name, who.c_str());
+  lv_label_set_long_mode(name, LV_LABEL_LONG_MODE_DOTS);
+  lv_obj_set_flex_grow(name, 1);
+  lv_obj_set_style_text_font(name, &deck_font_14, 0);
+  lv_obj_set_style_text_color(name, lv_color_hex(C_CLAUDE), 0);
+
+  if (sub.length()) {
+    lv_obj_t* s = askLabel(side, sub.c_str(), &deck_font_12, C_TEXT);
+    lv_obj_set_style_text_opa(s, LV_OPA_60, 0);
+    lv_obj_set_style_text_letter_space(s, 1, 0);
+  }
+  return side;
+}
+
+// What the side shows between its header and Hide; a long one scrolls.
+lv_obj_t* askBody(lv_obj_t* side) {
+  lv_obj_t* body = lv_obj_create(side);
+  lv_obj_remove_style_all(body);
+  lv_obj_set_width(body, lv_pct(100));
+  lv_obj_set_flex_grow(body, 1);
+  lv_obj_set_style_pad_top(body, 4, 0);
+  lv_obj_set_style_pad_row(body, 6, 0);
+  lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_scroll_dir(body, LV_DIR_VER);
+  return body;
+}
+
+// Hide, at the bottom of the side: the terminal still has the prompt.
+void askHideRow(lv_obj_t* side) {
+  lv_obj_t* x = lv_button_create(side);
+  lv_obj_remove_style_all(x);
+  lv_obj_set_size(x, lv_pct(100), LV_SIZE_CONTENT);
+  lv_obj_set_style_min_height(x, 36, 0);
+  lv_obj_t* xl = askLabel(x, LV_SYMBOL_CLOSE "  Hide \xC2\xB7 answer in terminal", &deck_font_12, C_TEXT);
+  lv_obj_set_style_text_opa(xl, LV_OPA_50, 0);
+  lv_obj_align(xl, LV_ALIGN_LEFT_MID, 0, 0);
+  lv_obj_add_event_cb(x, onAskHide, LV_EVENT_CLICKED, nullptr);
+}
+
+// The choices' column, beside or under the side.
+lv_obj_t* askChoices(lv_obj_t* c, int ow, int oh, bool wrap) {
+  lv_obj_t* o = lv_obj_create(c);
+  lv_obj_remove_style_all(o);
+  lv_obj_set_size(o, ow, oh);
+  lv_obj_set_style_pad_all(o, 12, 0);
+  lv_obj_set_style_pad_row(o, 8, 0);
+  lv_obj_set_style_pad_column(o, 8, 0);
+  lv_obj_set_flex_flow(o, wrap ? LV_FLEX_FLOW_ROW_WRAP : LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_scroll_dir(o, LV_DIR_VER);  // big text past the cells scrolls
+  return o;
+}
+
+// A question: which of how many (a bar each), the question, and its options
+// numbered, four in a 2x2 grid. A tap answers; one that takes several has Send.
+void askQuestionCard(const ClaudeAsk& a, const String& who, int w, int h) {
+  const bool wide = w >= h;
+  const int sw = wide ? w * 7 / 20 : w, sh = wide ? h : h * 9 / 20;
+  lv_obj_t* c = askRoot(w, h);
+
+  // "COLOR · 1 OF 2 · PICK ANY"
+  String sub = a.title[0] ? askUpper(a.title) : String();
+  if (a.qn > 1) sub += String(sub.length() ? " \xC2\xB7 " : "") + String(a.qi + 1) + " OF " + String(a.qn);
+  if (a.multi) sub += String(sub.length() ? " \xC2\xB7 " : "") + "PICK ANY";
+  lv_obj_t* side = askSide(c, who, sub, sw, sh);
+  if (a.qn > 1) {
+    lv_obj_t* bars = lv_obj_create(side);
+    lv_obj_remove_style_all(bars);
+    lv_obj_set_size(bars, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(bars, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(bars, 4, 0);
+    lv_obj_remove_flag(bars, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < a.qn && i < 8; i++) {
+      lv_obj_t* bar = lv_obj_create(bars);
+      lv_obj_remove_style_all(bar);
+      lv_obj_set_size(bar, 18, 4);
+      lv_obj_set_style_radius(bar, 2, 0);
+      lv_obj_set_style_bg_color(bar, lv_color_hex(i <= a.qi ? askAccent() : C_BUTTON), 0);
+      lv_obj_set_style_bg_opa(bar, i < a.qi ? LV_OPA_50 : LV_OPA_COVER, 0);  // done ones fainter
+    }
+  }
+  const size_t len = strlen(a.text);
+  askLabel(askBody(side), a.text, len <= (wide ? 70u : 120u) ? &deck_font_20 : &deck_font_14, C_TEXT);
+  askHideRow(side);
+
+  const int ow = wide ? w - sw : w, oh = wide ? h : h - sh;
+  const bool grid = a.optCount == 4;
+  lv_obj_t* opts = askChoices(c, ow, oh, grid);
+  const int rows = grid ? 2 : std::max<int>(1, a.optCount);
+  const int iw = ow - 24, ih = oh - 24 - (a.multi ? 44 + 8 : 0);
+  const int cellW = grid ? (iw - 8) / 2 : iw;
+  const int cellH = std::max(44, (ih - 8 * (rows - 1)) / rows);
+  size_t longest = 0;
+  for (int i = 0; i < a.optCount; i++) longest = std::max(longest, strlen(a.opts[i]));
+  const lv_font_t* font = longest <= (grid ? 20u : 32u) ? &deck_font_20 : &deck_font_14;
+  for (int i = 0; i < a.optCount; i++) {
+    char num[4];
+    snprintf(num, sizeof(num), "%d", i + 1);
+    lv_obj_t* b = askChoice(opts, a.opts[i], a.optDesc[i], num, grid, cellW, cellH, font, false, &s_askBadge[i]);
+    s_askBtn[i] = b;
+    lv_obj_add_event_cb(b, onAskOption, LV_EVENT_CLICKED, (void*)(intptr_t)i);
+  }
+  if (a.multi) {
+    lv_obj_t* send = askButton(opts, "Send", nullptr, true);
+    lv_obj_set_width(send, iw);
+    fxTouchBind(send);
+    lv_obj_add_event_cb(send, onAskSend, LV_EVENT_CLICKED, nullptr);
+  }
+}
+
+// A permission prompt: the tool, Claude's words for it and what it runs or
+// touches, on a wider side; the choices stacked, the main one (the PC lists
+// it last) on top, each with what it does.
+void askPermissionCard(const ClaudeAsk& a, const String& who, int w, int h) {
+  const bool wide = w >= h;
+  const int sw = wide ? w * 7 / 12 : w, sh = wide ? h : h * 11 / 20;
+  lv_obj_t* c = askRoot(w, h);
+
+  lv_obj_t* side = askSide(c, who, askUpper(a.title) + " \xC2\xB7 PERMISSION", sw, sh);
+  lv_obj_t* body = askBody(side);
+  char t[48];
+  snprintf(t, sizeof(t), "Allow %s?", a.title);
+  askLabel(body, t, &deck_font_20, C_TEXT);
+  if (a.desc[0]) lv_obj_set_style_text_opa(askLabel(body, a.desc, &deck_font_14, C_TEXT), LV_OPA_60, 0);
+  if (a.text[0]) {
+    // The command or file as it will run.
+    lv_obj_t* box = lv_obj_create(body);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_size(box, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(box, lv_color_hex(C_TILE), 0);
+    lv_obj_set_style_bg_opa(box, s_askGlass ? askButtonOpa() : LV_OPA_COVER, 0);
+    if (s_askGlass) askFrameStyle(box);
+    lv_obj_set_style_radius(box, 10, 0);
+    lv_obj_set_style_pad_all(box, 8, 0);
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);  // the body scrolls
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_CLICKABLE);
+    askLabel(box, a.text, &deck_font_14, C_TEXT);
+  }
+  askHideRow(side);
+
+  const int ow = wide ? w - sw : w, oh = wide ? h : h - sh;
+  lv_obj_t* opts = askChoices(c, ow, oh, false);
+  const int n = std::max<int>(1, a.optCount);
+  const int iw = ow - 24, cellH = std::max(44, (oh - 24 - 8 * (n - 1)) / n);
+  String hint = a.hint;
+  if (hint.startsWith("Always: ")) hint = hint.substring(8);  // the button says it
+  for (int k = 0; k < a.optCount; k++) {
+    const int i = a.optCount - 1 - k;
+    const char* label = a.opts[i];
+    String text = label;
+    const char* sub = nullptr;
+    if (!strcmp(label, "Allow")) {
+      text = LV_SYMBOL_OK "  Allow";
+      sub = "Just this once";
+    } else if (!strcmp(label, "Deny")) {
+      text = LV_SYMBOL_CLOSE "  Deny";
+      sub = "Claude stops and waits";
+    } else if (!strcmp(label, "Always")) {
+      sub = hint.c_str();
+    }
+    lv_obj_t* b = askChoice(opts, text.c_str(), sub, nullptr, false, iw, cellH, &deck_font_20, i == a.optCount - 1);
+    s_askBtn[i] = b;
+    lv_obj_add_event_cb(b, onAskOption, LV_EVENT_CLICKED, (void*)(intptr_t)i);
+  }
+}
+
+// animate: the card comes over the screen with the display's card effect;
+// not when it takes the place of one already shown.
+void askOpen(const ClaudeAsk& a, const PcSource& pc, bool animate) {
+  s_askPc = pc.id;
+  strlcpy(s_askId, a.id, sizeof(s_askId));
+  s_askQi = a.qi;
+  s_askQn = a.qn;
+  s_askKind = a.kind;
+  s_askMulti = a.multi;
+  s_askLocked = false;
+  s_askSerial++;
+  const int w = logicalW(), h = logicalH();
+  s_askW = w;
+  s_askH = h;
+  s_askScrim = lv_obj_create(lv_layer_top());  // under the card, for askSync's restacking
+  lv_obj_remove_style_all(s_askScrim);
+  lv_obj_set_size(s_askScrim, w, h);
+  lv_obj_add_flag(s_askScrim, LV_OBJ_FLAG_CLICKABLE);
+
+  // Whose session, and PC with several.
+  String head = a.session[0] ? a.session : "Claude Code";
+  if (pcOnlineCount() > 1) head += String(" on ") + pc.name;
+  if (a.kind == 'q') askQuestionCard(a, head, w, h);
+  else askPermissionCard(a, head, w, h);
+  s_askShownMs = millis();
+  setModalOpen(true);  // no swipes under it
+  if (!animate) return;
+  lv_obj_update_layout(s_askCard);
+  lv_point_t at = {w / 2, h / 2};
+  if (s_askDot) {
+    lv_area_t d;
+    lv_obj_get_coords(s_askDot, &d);
+    at = {(d.x1 + d.x2) / 2, (d.y1 + d.y2) / 2};
+  }
+  fxPromptOpen(s_askCard, at);
+}
+
+void askWake() {
+  const ClaudeAsk* a = pcClaudeAsk(nullptr);
+  if (!a || a->seq == s_askWoke) return;
+  s_askWoke = a->seq;
+  if (s_askHidden && !strcmp(a->id, s_askDoneId) && a->qi == s_askDoneQi) return;
+  presenceWake();  // out of idle sleep and the picture frame, and the timer restarts
+  if (nightScreenOff()) wakeDisplayFromTouch();  // a 0% night: a dim minute to answer in
+}
+
+void askSync() {
+  const uint32_t now = millis();
+  if (now - s_askChecked < 200) return;
+  s_askChecked = now;
+  const PcSource* pc = nullptr;
+  const ClaudeAsk* a = getScreenState() == SCREEN_DECK && !s_pairCard ? pcClaudeAsk(&pc) : nullptr;
+  if (!a) {
+    // Answered in the terminal, or the session moved on: the card goes as it came.
+    if (s_askCard) getScreenState() == SCREEN_DECK ? askCloseFx() : askClose();
+    return;
+  }
+  if (s_askCard && !strcmp(a->id, s_askId) && a->qi == s_askQi && s_askW == logicalW() && s_askH == logicalH()) {
+    if (s_askLocked && now - s_askDoneMs >= ASK_RETRY_MS) {  // the answer got lost: ask again
+      askClose(true);
+      askOpen(*a, *pc, false);
+      return;
+    }
+    // Stays over a card or the quick panel opened since, with no swipes under it.
+    const int32_t last = (int32_t)lv_obj_get_child_count(lv_layer_top()) - 1;
+    if (lv_obj_get_index(s_askCard) != last) {
+      lv_obj_move_foreground(s_askScrim);
+      lv_obj_move_foreground(s_askCard);
+    }
+    setModalOpen(true);
+    return;
+  }
+  if (!strcmp(a->id, s_askDoneId) && a->qi == s_askDoneQi && (s_askHidden || now - s_askDoneMs < ASK_RETRY_MS)) {
+    if (s_askCard) askClose();
+    return;
+  }
+  // Another prompt or the next question over this one: it takes its place at
+  // once, on the same frosted page (a copy now would be of this card).
+  const bool shown = s_askCard != nullptr;
+  if (shown) askClose(s_askW == logicalW() && s_askH == logicalH());
+  askOpen(*a, *pc, !shown);
 }
 
 }  // namespace deckui

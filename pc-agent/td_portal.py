@@ -246,7 +246,7 @@ def create_app(portal):
         jira: JiraForm = Field(default_factory=JiraForm)
         confluence: ConfluenceForm = Field(default_factory=ConfluenceForm)
 
-    app = FastAPI(title="TouchDeck agent", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="CompaDeck agent", docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
@@ -377,7 +377,7 @@ def create_app(portal):
                 html = f.read()
         except OSError:
             return HTMLResponse(
-                "<h1>TouchDeck agent</h1><p>The settings page is not built yet:</p>"
+                "<h1>CompaDeck agent</h1><p>The settings page is not built yet:</p>"
                 "<pre>cd pc-agent/portal &amp;&amp; npm install &amp;&amp; npm run build</pre>", status_code=503)
         return HTMLResponse(html.replace("__TD_SESSION__", portal.session))
 

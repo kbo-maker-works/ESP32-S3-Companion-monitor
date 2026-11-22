@@ -357,6 +357,7 @@ const char* pcCmdLabel(const String& cmd) {
   if (cmd.startsWith("open:")) return "Opening in the browser";
   if (cmd == "open_deck") return "Opening the deck's portal";
   if (cmd == "open_agent") return "Opening the agent's settings";
+  if (cmd.startsWith("claude:")) return "Answer for Claude";
   return "Run";
 }
 

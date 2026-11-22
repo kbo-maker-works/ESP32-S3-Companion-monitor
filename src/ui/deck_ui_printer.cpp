@@ -1,5 +1,7 @@
 // Deck UI: Bambu printer tiles.
 #include "ui/deck_ui_int.h"
+#include "hardware/led_fx.h"
+#include "core/companion_settings.h"
 
 namespace deckui {
 
@@ -25,6 +27,7 @@ struct PrnTrack {
   bool follow = false;     // its print start showed the printer page (printerSettings.follow)
   uint32_t endMs = 0;      // follow: when the job ended, 0 = still running
   uint32_t cooledMs = 0;   // follow: when the bed was cool after the job, 0 = not yet
+  uint32_t doneMs = 0;     // LED: when the job finished, 0 = no finished print to show
   uint64_t announced[PRN_ANNOUNCED];  // PrinterAlert::key(), oldest first
   uint8_t nAnnounced = 0;
 };
@@ -1316,11 +1319,15 @@ void printerEvents() {
     const bool finished = !strcmp(st, "FINISH");
     if (job && !t.job) {
       t.cool = false;
+      t.doneMs = 0;
       if (t.seen) prnFollowStart(t);
     }
     if (t.seen && t.job && (finished || !strcmp(st, "FAILED"))) {
       t.cool = finished && printerSettings.coolAlert;
-      if (finished) audioEvent(SND_FINISHED);
+      if (finished) {
+        audioEvent(SND_FINISHED);
+        t.doneMs = millis() | 1;
+      }
     }
     t.seen = true;
     t.job = job;
@@ -1395,6 +1402,83 @@ void heroTick() {
   }
   // Draw the step now, on its grid, not at LVGL's next refresh.
   if (moved) lv_refr_now(nullptr);
+}
+
+// --- The LED strip (hardware/led) ----------------------------------------------------
+// The shown page's own effect, if it has one, and the event over it: the worst
+// of a printer error, Claude waiting on an answer, a finished print (until a
+// touch, the bed cooled or half an hour), a print's progress in its
+// filament's color. Each event on its own box on the Hardware page.
+constexpr uint32_t LED_DONE_MAX_MS = 30 * 60000;
+constexpr uint32_t LED_DONE_MIN_MS = 60000;  // a bed already cool still shows it a minute
+uint32_t s_ledEvalMs = 0;
+
+uint32_t prnFilamentColor(const PrinterState& s) {
+  const PrinterTray* t = nullptr;
+  if (s.activeUnit == 254) t = s.extPresent ? &s.ext : nullptr;
+  else if (s.activeUnit < s.amsCount && s.activeSlot < PRN_AMS_SLOTS) t = &s.ams[s.activeUnit].tray[s.activeSlot];
+  return t && t->present ? t->rgb : C_PRN_BLUE;
+}
+
+void ledEventsTick() {
+  const uint32_t now = millis();
+  if (now - s_ledEvalMs < 100) return;
+  s_ledEvalMs = now;
+  // The radar app sweeps the strip with its beam; else the shown page's own
+  // effect, the Hardware page's otherwise.
+  const int a = sh.active;
+  const PageDef* pd = a >= 0 && a < s_count ? s_pages[a].def : nullptr;
+  const bool radar = companion::settings().radarLed && !strcmp(openAppId(), "radar");
+  if (radar) {
+    LedFxSettings fx = ledFxSettings;
+    fx.effect = LED_FX_RADAR;
+    fx.intensity = 77;  // a trail of ~80 degrees, as the screen's 70 plus the glow
+    ledSetPageFx(&fx, 0x34F5A0);  // the radar's phosphor green
+  } else if (pd && pd->ledOwn) {
+    LedFxSettings fx = ledFxSettings;
+    fx.effect = pd->ledFx;
+    fx.speed = pd->ledSpeed;
+    fx.intensity = pd->ledIntensity;
+    fx.color2 = pd->ledColor2;
+    ledSetPageFx(&fx, pd->ledColor);
+  } else {
+    ledSetPageFx(nullptr, 0);
+  }
+  const uint8_t ev = ledFxSettings.events;
+  if (!ledSettings.enabled || ledSettings.type != LED_TYPE_STRIP || !ev) {
+    ledSetEvent(LED_EV_NONE);
+    return;
+  }
+  const uint32_t touch = touchLastActivity();
+  bool error = false, done = false;
+  const PrinterState* job = nullptr;
+  for (size_t i = 0; i < s_cfg.printers.size() && i < MAX_PRINTERS; i++) {
+    const PrinterState* s = s_prnHave[i] ? s_prn[i] : nullptr;
+    PrnTrack* t = prnTrackFor(s_cfg.printers[i].id);
+    if (!prnShown(s)) {
+      if (t) t->doneMs = 0;
+      continue;
+    }
+    if (printerSettings.errors && printerAlert(*s).sev) error = true;
+    const char* st = s->gcodeState;
+    const bool inJob = !strcmp(st, "RUNNING") || !strcmp(st, "PREPARE") || !strcmp(st, "SLICING") || !strcmp(st, "PAUSE");
+    if (inJob && !job) job = s;
+    if (t && t->doneMs) {
+      const uint32_t age = now - t->doneMs;
+      const bool over = inJob || age >= LED_DONE_MAX_MS || (touch && (int32_t)(touch - t->doneMs) > 0) ||
+                        (age >= LED_DONE_MIN_MS && isfinite(s->bed) && s->bed <= printerSettings.coolTemp);
+      if (over) t->doneMs = 0;
+      else done = true;
+    }
+  }
+  // With the radar open only an error or Claude take the strip from its sweep.
+  if ((ev & LED_EVB_ERROR) && error) ledSetEvent(LED_EV_ERROR);
+  else if ((ev & LED_EVB_CLAUDE) && pcClaudeAsk(nullptr)) ledSetEvent(LED_EV_CLAUDE);
+  else if (radar) ledSetEvent(LED_EV_NONE);
+  else if ((ev & LED_EVB_DONE) && done) ledSetEvent(LED_EV_DONE);
+  else if ((ev & LED_EVB_PROGRESS) && job)
+    ledSetEvent(LED_EV_PROGRESS, job->progress, prnFilamentColor(*job), !strcmp(job->gcodeState, "PAUSE"));
+  else ledSetEvent(LED_EV_NONE);
 }
 
 }  // namespace deckui

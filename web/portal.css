@@ -1268,3 +1268,35 @@ input[type="range"]::-webkit-slider-thumb {
   display: flex;
   gap: 8px;
 }
+/* LED card: color swatches and an event row with its Test button. */
+.led-swatch {
+  width: 46px;
+  height: 42px;
+  padding: 3px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--card);
+  cursor: pointer;
+}
+.led-ev {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.led-ev {
+  border-top: 1px solid var(--line-soft);
+}
+.led-ev:first-child {
+  border-top: 0;
+}
+/* Each row is the first child of its wrapper: undo the list's first-row rule. */
+.led-ev .check-row,
+.led-ev .check-row:first-child {
+  flex: 1;
+  min-width: 0;
+  border-top: 0;
+  padding: 13px 0;
+}
+.led-ev:first-child .check-row {
+  padding-top: 0;
+}

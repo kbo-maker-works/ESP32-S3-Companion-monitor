@@ -44,6 +44,9 @@ struct Def {
   void (*tap)(void* state) = nullptr;
   // Shows a PC's data: the editors offer the tile's "pc".
   bool pc = false;
+  // Optional: an app is about to open; let go of big buffers (the widget
+  // rebuilds them in update() once no app is shown).
+  void (*release)(void* state) = nullptr;
 };
 
 const Def* find(const char* id);

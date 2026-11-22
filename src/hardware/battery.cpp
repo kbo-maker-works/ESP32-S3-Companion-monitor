@@ -1,6 +1,7 @@
 #include "hardware/battery.h"
 #include <Arduino.h>
 #include <stdlib.h>
+#include "config.h"
 
 namespace {
 
@@ -45,6 +46,7 @@ int s_upRun = 0, s_downRun = 0;
 float s_trendMv = 0;
 uint32_t s_trendAt = 0;
 int s_samples = 0;
+uint32_t s_seq = 0;  // batterySeq()
 uint32_t s_last = 0;
 float s_mv = 0;
 int s_pct = -1;
@@ -68,10 +70,22 @@ int pctFor(float mv) {
 }
 
 // USB power from a PC: the host sends start-of-frame packets. A wall charger
-// does not, so charging from one is not seen.
+// does not: vbusPresent() sees it when wired, the cell's voltage otherwise.
 bool usbPowered() {
 #if ARDUINO_USB_MODE && ARDUINO_USB_CDC_ON_BOOT
   return HWCDC::isPlugged();
+#else
+  return false;
+#endif
+}
+
+// The USB 5 V itself, on VBUS_SENSE_PIN (config.h). When it is wired it is
+// exact, and the voltage guesses below stay off.
+constexpr bool kVbusSense = VBUS_SENSE_PIN >= 0;
+
+bool vbusPresent() {
+#if VBUS_SENSE_PIN >= 0
+  return digitalRead(VBUS_SENSE_PIN) == HIGH;
 #else
   return false;
 #endif
@@ -85,12 +99,16 @@ bool batteryUpdate() {
   s_last = now;
   const int mv = sampleMv();
   const bool usb = usbPowered();
+#if VBUS_SENSE_PIN >= 0
+  if (!s_started) pinMode(VBUS_SENSE_PIN, INPUT);  // the divider's 15k pulls it down
+#endif
   if (s_usb && !usb) s_ext = false;  // the PC's cable came out: its power went with it
   s_usb = usb;
+  if (kVbusSense) s_ext = !usb && vbusPresent();
 
   // Steps against the smoothed reading, before it takes this sample in.
   bool step = false;
-  if (s_started && !usb && mv >= PRESENT_MV) {
+  if (!kVbusSense && s_started && !usb && mv >= PRESENT_MV) {
     const int d = mv - (int)s_mv;
     s_upRun = d >= STEP_MV ? s_upRun + 1 : 0;
     s_downRun = d <= -STEP_MV ? s_downRun + 1 : 0;
@@ -118,14 +136,15 @@ bool batteryUpdate() {
     s_trendMv = s_mv;
     s_trendAt = now;
   } else if (now - s_trendAt >= TREND_MS) {
-    if (!usb && s_mv >= PRESENT_MV) {
+    if (!kVbusSense && !usb && s_mv >= PRESENT_MV) {
       if (s_mv - s_trendMv >= TREND_MV) s_ext = true;
       else if (s_trendMv - s_mv >= TREND_MV) s_ext = false;
     }
     s_trendMv = s_mv;
     s_trendAt = now;
   }
-  if (s_samples < BOOT_SAMPLES && ++s_samples == BOOT_SAMPLES && !usb && s_mv >= CHARGE_FULL_MV) s_ext = true;
+  if (!kVbusSense && s_samples < BOOT_SAMPLES && ++s_samples == BOOT_SAMPLES && !usb && s_mv >= CHARGE_FULL_MV)
+    s_ext = true;
 
   int pct = s_mv >= PRESENT_MV ? pctFor(s_mv - (charging ? CHARGE_RISE_MV : 0)) : -1;
   if (pct >= 0 && charging && s_mv >= CHARGE_FULL_MV) pct = 100;
@@ -134,8 +153,11 @@ bool batteryUpdate() {
     pct = s_pct;
   if (pct == s_pct && !plugChange) return false;
   s_pct = pct;
+  s_seq++;
   return true;
 }
+
+uint32_t batterySeq() { return s_seq; }
 
 int batteryPercent() { return s_pct; }
 

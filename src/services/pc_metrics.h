@@ -124,6 +124,42 @@ struct ClaudeLive {
   ClaudeUsage usage;
 };
 
+// --- Claude Code asking you (pc-agent/td_ask.py) ---------------------------
+// While a Claude Code session waits on a permission prompt or a question, the
+// companion sends a packet of its own every second (once paired):
+//   "ask": {"id": "a1b2c3d4",              // the prompt; the answer names it
+//           "s": "desktop-companion",      // the session
+//           "k": "p",                      // p = a permission, q = a question
+//           "t": "Bash",                   // p: the tool; q: the question's header
+//           "x": "pio run -t upload",      // p: what it runs or touches; q: the question
+//           "d": "Build the firmware",     // optional, p: Claude's description of it
+//           "o": ["Deny", "Always", "Allow"],  // the options, up to 4; p: the last is the main one
+//           "od": ["...", ...],            // optional, q: each option's description
+//           "h": "Always: Bash(pio run:*)",    // optional, p: what Always does
+//           "m": false,                    // q: several options may be picked
+//           "qi": 0, "qn": 2}              // q: question qi+1 of qn
+// and its "claude" object names it ("ask": "a1b2c3d4", "" = none waits). The
+// terminal shows the same dialog meanwhile; whichever answers first wins. The
+// deck answers with the command "claude:<id>:<qi>:<choice>", choice = the
+// option's index, or several joined by "," when "m".
+constexpr int CLAUDE_ASK_OPTS = 4;
+struct ClaudeAsk {
+  char id[12];
+  char session[24];
+  char kind;           // 'p' or 'q', 0 = none
+  char title[32];
+  char text[240];
+  char desc[100];
+  char hint[64];
+  char opts[CLAUDE_ASK_OPTS][48];
+  char optDesc[CLAUDE_ASK_OPTS][80];
+  uint8_t optCount;
+  bool multi;
+  uint8_t qi, qn;
+  uint32_t seq;        // bumps when another prompt or question arrives
+  uint32_t rxMs;       // millis() of its last packet
+};
+
 struct PcSource {
   bool     used;
   char     id[17];
@@ -141,6 +177,7 @@ struct PcSource {
   int32_t  idleS;        // seconds since the PC's last keyboard or mouse input ("idle"), -1 = unknown
   uint32_t idleRxMs;     // millis() when idleS arrived
   ClaudeLive claude;     // this PC's Claude Code (its own account and quota)
+  ClaudeAsk ask;         // what one of its sessions waits on you for
 };
 
 // MAX_PCS entries, in PSRAM (each holds ~8 KB of history).
@@ -197,6 +234,9 @@ const ClaudeLive& pcClaude();
 bool pcClaudeOnline();
 // The Claude PC (null when none ever sent Claude data).
 const PcSource* pcClaudePc();
+// The prompt a Claude Code session waits on, from any online PC (the one that
+// came first); null when none. who: that PC, for pcSendCommand.
+const ClaudeAsk* pcClaudeAsk(const PcSource** who);
 
 // --- PC control -------------------------------------------------------------
 // A command goes to the PC's cmd_port as {"pc","cmd","nonce","sig"}, sig =

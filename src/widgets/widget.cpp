@@ -1,4 +1,5 @@
-// Widget registry and the widgets: weather, Claude mascot and usage, Work, PC stats. See widget.h.
+// Widget registry and the widgets: weather, Claude mascot and usage, Work, PC stats (the radar is in
+// widget_radar.cpp). See widget.h.
 #include "widgets/widget.h"
 #include "ui/deck_ui_int.h"
 #include "core/companion_settings.h"
@@ -10,6 +11,7 @@
 #include <src/misc/lv_anim_private.h>  // lv_anim_t::var in the mascot's anim callback
 
 namespace widget {
+extern const Def kRadarWidget;  // widget_radar.cpp
 namespace {
 
 using namespace deckui;
@@ -1452,7 +1454,7 @@ const Def kJira = {"jira", "Jira filter", nullptr, work::kJiraVariants,
 const Def kPc = {"pc", "PC stats", nullptr, pcstats::kVariants, 4,
                  pcstats::create, pcstats::update, pcstats::resize, pcstats::destroy, nullptr, true};
 
-const Def* const kWidgets[] = {&kWeather, &kMascot, &kQuota, &kGitlab, &kJira, &kPc};
+const Def* const kWidgets[] = {&kWeather, &kMascot, &kQuota, &kGitlab, &kJira, &kPc, &kRadarWidget};
 constexpr size_t kCount = sizeof(kWidgets) / sizeof(kWidgets[0]);
 
 }  // namespace

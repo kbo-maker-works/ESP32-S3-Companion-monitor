@@ -3,6 +3,7 @@
 #include "apps/app_ia.h"
 #include "apps/app_work.h"
 #include "apps/app_radar.h"
+#include "apps/app_bench.h"
 #include "ui/deck_ui_int.h"
 #include "services/pc_metrics.h"
 #include "config.h"
@@ -170,7 +171,7 @@ void tickInfo() {
 
 void closeInfo() { s_qr = nullptr; }
 
-// kIa lives in app_ia.cpp, kWork in app_work.cpp.
+// kIa lives in app_ia.cpp, kWork in app_work.cpp, kBench in app_bench.cpp.
 const Def kSistema = {"sistema", "System", "mdi:chip", false, openSoon, nullptr, nullptr};
 const Def kRed = {"red", "Network", "mdi:lan", false, openSoon, nullptr, nullptr};
 const Def kAudio = {"audio", "Audio", "mdi:speaker", false, openSoon, nullptr, nullptr};
@@ -179,7 +180,7 @@ const Def kAjustes = {"ajustes", "Settings", "mdi:cog-outline", true, openInfo, 
 // --- Registry ------------------------------------------------------------------
 // Order = order in the portal's app list. Apps in their own file (app_radar.cpp)
 // export their Def through a header.
-const Def* const kApps[] = {&kIa, &kWork, &kSistema, &kRed, &kRadar, &kAudio, &kAjustes};
+const Def* const kApps[] = {&kIa, &kWork, &kBench, &kSistema, &kRed, &kRadar, &kAudio, &kAjustes};
 constexpr size_t kAppCount = sizeof(kApps) / sizeof(kApps[0]);
 
 }  // namespace

@@ -4,7 +4,7 @@
 //
 // The HTTPS request runs in its own FreeRTOS task on core 0, so the UI never
 // blocks on it. It only fetches while the radar is open (setActive) and WiFi
-// is up, every REFRESH_MS.
+// is up, every REFRESH_MS (the radar app, or a radar widget on the page shown).
 #ifndef FLIGHT_SERVICE_H
 #define FLIGHT_SERVICE_H
 
@@ -43,8 +43,11 @@ struct Snapshot {
 };
 
 void begin();
-// The radar turns it on when it opens and off when it closes.
-void setActive(bool on);
+// Who wants the data: the app while open, the widgets while one is on screen.
+enum Holder : uint8_t { HOLD_APP = 1, HOLD_WIDGET = 2 };
+// The radar turns it on when it opens and off when it closes (a widget with
+// HOLD_WIDGET); it fetches while anyone holds it.
+void setActive(bool on, uint8_t who = HOLD_APP);
 // Fetch again as soon as possible (radius changed).
 void refreshSoon();
 // The latest data, filtered (Ground) and cut to the MAX nearest.

@@ -829,7 +829,7 @@ SAMPLE = [{
 
 
 def main():
-    ap = argparse.ArgumentParser(description="TouchDeck: Bambu printers through Bambu Cloud")
+    ap = argparse.ArgumentParser(description="CompaDeck: Bambu printers through Bambu Cloud")
     ap.add_argument("--sample", action="store_true", help="push a sample printer to the deck")
     ap.add_argument("--host", default=os.environ.get("TOUCHDECK_HOST", "companion.local"))
     args = ap.parse_args()

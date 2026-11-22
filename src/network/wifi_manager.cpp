@@ -4,6 +4,7 @@
 #include "config.h"
 #include "network/improv_setup.h"
 #include "network/wifi_known.h"
+#include "hardware/power.h"
 #include <WiFi.h>
 #include <DNSServer.h>
 #include <ESPmDNS.h>
@@ -235,14 +236,17 @@ void initWiFi() {
       return;
     }
 
-    for (int attempt = 1; attempt <= 3; attempt++) {
+    // A timer wake from deep sleep (on battery, no WiFi) makes one try:
+    // hardware/power.cpp puts it back to sleep shortly.
+    const int attempts = powerQuietBoot() ? 1 : 3;
+    for (int attempt = 1; attempt <= attempts; attempt++) {
       unsigned long start = millis();
 
       if (attempt == 1 && splashStaStarted) {
-        Serial.printf("Connecting to WiFi: %s (attempt 1/3, continued after splash)\n", wifiSSID);
+        Serial.printf("Connecting to WiFi: %s (attempt 1/%d, continued after splash)\n", wifiSSID, attempts);
         start = splashStaStartMs;
       } else {
-        Serial.printf("Connecting to WiFi: %s (attempt %d/3)\n", wifiSSID, attempt);
+        Serial.printf("Connecting to WiFi: %s (attempt %d/%d)\n", wifiSSID, attempt, attempts);
         beginStaConnectAttempt();
       }
 
@@ -273,6 +277,12 @@ void initWiFi() {
     }
 
     splashStaStarted = false;
+    if (powerQuietBoot()) {
+      // Nobody is looking and the setup AP draws the most: handleWiFi()
+      // keeps retrying the STA until the sleep.
+      Serial.println("WiFi connection failed on a timer wake, no setup AP");
+      return;
+    }
     Serial.println("WiFi connection failed, starting AP");
   }
 

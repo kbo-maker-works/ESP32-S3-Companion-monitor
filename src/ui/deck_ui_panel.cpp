@@ -195,6 +195,7 @@ const uint16_t* lastFrame() {
 struct Frost {
   const uint16_t* fb;
   int sw, shgt, x, y, w, h, rad, hw, hh;
+  int tint;  // % of C_PANEL over the blur
   uint8_t* plane[3];
   uint8_t* scratch[3];  // per blur plane, then per half of the upscale
   lv_draw_buf_t* out;
@@ -225,10 +226,10 @@ void frostBlur(void* ctx, int lo, int hi) {
 // Rows lo..hi: tinted, dithered, corners cut by alpha.
 void frostUp(void* ctx, int lo, int hi) {
   const Frost& f = *(const Frost*)ctx;
-  const int w = f.w, h = f.h, hw = f.hw, hh = f.hh, rad = f.rad;
+  const int w = f.w, h = f.h, hw = f.hw, hh = f.hh, rad = f.rad, tp = f.tint;
   // Tint and blur in 1/1600: the bilinear sum is in 16ths.
-  const int tint[3] = {(int)(C_PANEL >> 16 & 0xFF) * FROST_TINT * 16, (int)(C_PANEL >> 8 & 0xFF) * FROST_TINT * 16,
-                       (int)(C_PANEL & 0xFF) * FROST_TINT * 16};
+  const int tint[3] = {(int)(C_PANEL >> 16 & 0xFF) * tp * 16, (int)(C_PANEL >> 8 & 0xFF) * tp * 16,
+                       (int)(C_PANEL & 0xFF) * tp * 16};
   const uint32_t stride = f.out->header.stride;
   uint8_t* alpha = f.out->data + stride * h;  // RGB565A8: the A8 plane follows, half the stride
   // Bilinear between the half-resolution samples (centres at 2i + 0.5), in
@@ -262,7 +263,7 @@ void frostUp(void* ctx, int lo, int hi) {
     for (int xx = 0; xx < w; xx++) {
       int c[3];
       for (int k = 0; k < 3; k++)
-        c[k] = ((a0[k * w + xx] * (4 - wy) + a1[k * w + xx] * wy) * (100 - FROST_TINT) + tint[k]) / 1600;
+        c[k] = ((a0[k * w + xx] * (4 - wy) + a1[k * w + xx] * wy) * (100 - tp) + tint[k]) / 1600;
       row[xx] = wallDither565(c[0], c[1], c[2], f.x + xx, f.y + yy);
     }
     memset(arow, 255, w);
@@ -280,9 +281,11 @@ void frostUp(void* ctx, int lo, int hi) {
 
 // The last frame under (x, y, w, h), blurred and tinted, with corners of
 // radius rad cut by alpha (a background image ignores the radius). Pixels off
-// the screen repeat its edge. RGB565A8; nullptr when PSRAM is short.
-lv_draw_buf_t* frostedCopy(int x, int y, int w, int h, int rad) {
+// the screen repeat its edge. tintPct: how much C_PANEL covers the blur, -1 =
+// FROST_TINT. RGB565A8; nullptr when PSRAM is short.
+lv_draw_buf_t* frostedCopy(int x, int y, int w, int h, int rad, int tintPct) {
   Frost f = {lastFrame(), logicalW(), logicalH(), x, y, w, h, rad, (w + 1) / 2, (h + 1) / 2};
+  f.tint = tintPct < 0 ? FROST_TINT : std::min(tintPct, 100);
   const size_t hn = (size_t)f.hw * f.hh, sn = std::max(hn, (size_t)w * 12);
   uint8_t* pl = (uint8_t*)heap_caps_malloc(hn * 3 + sn * 3, MALLOC_CAP_SPIRAM);
   f.out = pl ? lv_draw_buf_create(w, h, LV_COLOR_FORMAT_RGB565A8, 0) : nullptr;

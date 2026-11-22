@@ -28,6 +28,7 @@ struct Def {
   // On close, before the view is deleted (optional): stop work, free memory.
   void (*close)();
   bool pc = false;   // uses a PC agent: the portal lets it have a PC of its own
+  bool awake = false;  // the screen does not go to sleep while it is open
 };
 
 const Def* find(const char* id);

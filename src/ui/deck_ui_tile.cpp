@@ -85,6 +85,20 @@ void widgetsTick() {
     if (r.wdef && r.wstate && r.wdef->update(r.wstate) && r.page != sh.active) markPageStale(r.page);
 }
 
+void widgetsRelease() {
+  for (TileRt& r : s_tiles)
+    if (r.wdef && r.wstate && r.wdef->release) r.wdef->release(r.wstate);
+}
+
+bool widgetOnScreen(const void* wstate) {
+  if (!wstate || !currentBacklightLevel() || manualDisplayOff() || frameActive() || appShown() || s_modalCard ||
+      s_ed.root || s_qp.open)
+    return false;
+  for (const TileRt& r : s_tiles)
+    if (r.wstate == wstate) return r.page == sh.active;
+  return false;
+}
+
 void widgetFree(TileRt& r) {
   if (r.wdef && r.wstate) r.wdef->destroy(r.wstate);
   r.wstate = nullptr;

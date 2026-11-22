@@ -304,6 +304,53 @@
       "</div>"
     );
   }
+  /* The LED strip's effect while the page shows ("led" in deck.json): the
+   effect list comes from portal.js (Hardware page). Left out = the Hardware
+   page's effect. */
+  function pageLedField(p) {
+    const fxs = window.LED_FX || [];
+    const L = p.led || null;
+    const info = L ? fxs.find((f) => f.id === Number(L.fx)) || fxs[0] : null;
+    let h =
+      '<div class="field"><label class="field-label">Light on this page</label><div class="dk-row"><select id="dkPLed" style="width:auto">' +
+      opt("", "As on the Hardware page", !L) +
+      fxs.map((f) => opt(String(f.id), f.name, !!L && Number(L.fx) === f.id)).join("") +
+      "</select>";
+    if (L && info && !info.noC1)
+      h +=
+        '<input type="color" id="dkPLedC1" class="led-swatch" title="Color" value="' +
+        esc((L.color || "#ffffff").toLowerCase()) +
+        '">';
+    if (L && info && info.c2)
+      h +=
+        '<input type="color" id="dkPLedC2" class="led-swatch" title="' +
+        esc(info.c2) +
+        '" value="' +
+        esc((L.color2 || "#0040ff").toLowerCase()) +
+        '">';
+    h += "</div>";
+    if (L && info && (info.speed || info.inten)) {
+      h += '<div class="grid-2">';
+      if (info.speed)
+        h +=
+          '<div class="field"><label class="field-label">' +
+          esc(info.speed) +
+          '</label><input type="range" id="dkPLedSp" min="0" max="255" value="' +
+          (L.speed == null ? 128 : L.speed) +
+          '"></div>';
+      if (info.inten)
+        h +=
+          '<div class="field"><label class="field-label">' +
+          esc(info.inten) +
+          '</label><input type="range" id="dkPLedIn" min="0" max="255" value="' +
+          (L.intensity == null ? 128 : L.intensity) +
+          '"></div>';
+      h += "</div>";
+    }
+    h +=
+      '<p class="field-hint">The LED strip while this page shows. Brightness, the night level and the events stay as on the Hardware page.</p></div>';
+    return h;
+  }
   /* A page can follow a condition too; "auto" slides to it when it appears. */
   function pageWhenField(p) {
     const k = typeof p.when === "string" ? p.when : "";
@@ -2053,6 +2100,7 @@
           .join("") +
         "</select></div>";
     h += pageWhenField(p);
+    h += pageLedField(p);
     h +=
       '<label class="check-row standalone"><input type="checkbox" id="dkPStack"' +
       (stackedAt(ps, cur) ? " checked" : "") +
@@ -2296,6 +2344,29 @@
       renderTabs();
       renderPage();
     };
+    $("dkPLed").onchange = (e) => {
+      const v = e.target.value;
+      if (v === "") delete p.led;
+      else
+        p.led = Object.assign({ color: "#ffffff", color2: "#0040ff", speed: 128, intensity: 128 }, p.led || {}, {
+          fx: Number(v),
+        });
+      setDirty(true);
+      renderPage();
+    };
+    [
+      ["dkPLedC1", "color", false],
+      ["dkPLedC2", "color2", false],
+      ["dkPLedSp", "speed", true],
+      ["dkPLedIn", "intensity", true],
+    ].forEach(([id, key, num]) => {
+      const el = $(id);
+      if (el)
+        el.oninput = (e) => {
+          p.led[key] = num ? Number(e.target.value) : e.target.value;
+          setDirty(true);
+        };
+    });
     $("dkPHome").onchange = (e) => {
       deck.pages.forEach((x) => delete x.home);
       if (e.target.checked) p.home = true;

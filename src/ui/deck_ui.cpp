@@ -4,6 +4,7 @@
 #include "hardware/battery.h"
 #include "services/work_data.h"
 #include "apps/app.h"
+#include "apps/app_bench.h"
 #include <src/misc/lv_anim_private.h>  // lv_anim_enable_vsync_mode
 
 namespace deckui {
@@ -857,7 +858,13 @@ void updateHeaders() {
     }
   }
   updateStatus();
-  if (batteryUpdate()) refreshBattery();
+  // By sequence: hardware/power polls the battery too and may see the change first.
+  static uint32_t s_batterySeen = 0;
+  batteryUpdate();
+  if (batterySeq() != s_batterySeen) {
+    s_batterySeen = batterySeq();
+    refreshBattery();
+  }
   const time_t epoch = time(nullptr);
   if (epoch < 1609459200) return;  // not synced yet
   struct tm lt;
@@ -1168,6 +1175,9 @@ void deckTick() {
     wakeDisplayFromTouch();
     touchSuppressUntilRelease();
   }
+  askWake();
+  benchDeckTick();  // a new bench sheet opens its app
+  ledEventsTick();
   presenceTick();
   frameTick();
   appTick();
@@ -1218,6 +1228,7 @@ void deckTick() {
   whenSync();
   pcCmdSync();
   pairSync();
+  askSync();
   pcSync(false);
   mediaArtTick();
   pcVolumeTick();

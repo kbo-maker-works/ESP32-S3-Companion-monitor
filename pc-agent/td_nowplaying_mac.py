@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-TouchDeck agent helper: what macOS is playing now, for td_media_mac.py.
+CompaDeck agent helper: what macOS is playing now, for td_media_mac.py.
 
 Since macOS 15.4 only Apple-signed programs may read MediaRemote, the private
 framework behind Control Centre's Now Playing. The agent's own Python (pyenv,

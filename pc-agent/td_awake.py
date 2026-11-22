@@ -1,5 +1,5 @@
 """
-TouchDeck agent: Keep awake, a USB mouse jiggler in software.
+CompaDeck agent: Keep awake, a USB mouse jiggler in software.
 
 While on:
   * Awake: the computer does not sleep and the screen neither sleeps nor locks

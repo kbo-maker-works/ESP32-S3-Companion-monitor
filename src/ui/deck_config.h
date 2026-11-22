@@ -217,6 +217,11 @@ struct PageDef {
   bool shown = true;      // runtime, as for tiles
   uint8_t cols[2] = {4, 3};
   uint8_t rows[2] = {3, 4};
+  // "led": the LED strip's effect while this page shows, instead of the
+  // Hardware page's ({"fx", "color", "color2", "speed", "intensity"}).
+  bool ledOwn = false;
+  uint8_t ledFx = 0, ledSpeed = 128, ledIntensity = 128;
+  uint32_t ledColor = 0xFFFFFF, ledColor2 = 0x0040FF;
   std::vector<TileDef> tiles;
 };
 

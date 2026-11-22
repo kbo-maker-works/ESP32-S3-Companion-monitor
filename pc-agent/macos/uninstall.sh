@@ -1,5 +1,5 @@
 #!/bin/bash
-# Stops the TouchDeck agent service and removes its LaunchAgent. Keeps the
+# Stops the CompaDeck agent service and removes its LaunchAgent. Keeps the
 # settings (~/.touchdeck), the logs (~/Library/Logs/TouchDeck) and .venv.
 set -euo pipefail
 LABEL="com.touchdeck.agent"

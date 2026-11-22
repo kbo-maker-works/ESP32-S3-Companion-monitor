@@ -673,7 +673,7 @@ SAMPLE = {
 
 
 def main():
-    ap = argparse.ArgumentParser(description="TouchDeck work data (GitLab, Jira)")
+    ap = argparse.ArgumentParser(description="CompaDeck work data (GitLab, Jira)")
     ap.add_argument("--once", action="store_true", help="poll once with ~/.touchdeck/work.json and print it")
     ap.add_argument("--sample", action="store_true", help="push sample data to the deck")
     ap.add_argument("--host", default=os.environ.get("TOUCHDECK_HOST", "companion.local"))

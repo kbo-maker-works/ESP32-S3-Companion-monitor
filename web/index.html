@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta name="theme-color" content="#161512" />
-    <title>TouchDeck</title>
+    <title>CompaDeck</title>
     <script>
       (function () {
         try {
@@ -102,7 +102,7 @@
           <span></span>
         </button>
         <div class="tb-brand">
-          <span class="brand-mark" aria-hidden="true"></span><span class="tb-name">TouchDeck</span
+          <span class="brand-mark" aria-hidden="true"></span><span class="tb-name">CompaDeck</span
           ><span class="tb-ver" id="topVersion">...</span>
         </div>
         <span class="tb-sep" aria-hidden="true"></span><span class="tb-crumb" id="crumb">Overview</span>
@@ -181,7 +181,7 @@
             </div>
           </div>
           <div class="about">
-            <span>TouchDeck <b id="aboutVersion">...</b></span
+            <span>CompaDeck <b id="aboutVersion">...</b></span
             ><span id="aboutBoard">ESP32</span>
           </div>
         </aside>
@@ -545,6 +545,63 @@
                       ></span
                     ></label
                   >
+                  <section style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line)">
+                    <h3 style="margin: 0 0 4px">Claude cards</h3>
+                    <p class="field-hint" style="margin: 0 0 14px">
+                      Permission prompts and questions from Claude Code, answered on the deck.
+                    </p>
+                    <div class="grid-2">
+                      <div class="field">
+                        <label class="field-label" for="askBg">Card background</label>
+                        <div class="range-row">
+                          <input type="range" id="askBg" name="askBg" min="0" max="90" step="5" /><span
+                            class="range-val"
+                            id="askBgVal"
+                            >--</span
+                          >
+                        </div>
+                        <p class="field-hint" data-tip>
+                          How dark the glass behind the card is. Its buttons keep at least 40% so they read.
+                        </p>
+                      </div>
+                      <div class="field">
+                        <label class="field-label" for="askFrame">Card frame</label>
+                        <div class="range-row">
+                          <input type="range" id="askFrame" name="askFrame" min="0" max="100" step="5" /><span
+                            class="range-val"
+                            id="askFrameVal"
+                            >--</span
+                          >
+                        </div>
+                        <p class="field-hint" data-tip>The light edge around the card and its buttons. 0% = none.</p>
+                      </div>
+                      <div class="field">
+                        <label class="field-label" for="askFrameColor">Frame colour</label>
+                        <input
+                          type="color"
+                          id="askFrameColor"
+                          name="askFrameColor"
+                          value="#ffffff"
+                          style="
+                            width: 46px;
+                            height: 42px;
+                            padding: 3px;
+                            border: 1px solid var(--line-2);
+                            border-radius: var(--r-md);
+                            background: var(--card);
+                            cursor: pointer;
+                          "
+                        />
+                      </div>
+                    </div>
+                    <label class="check-row standalone"
+                      ><input type="checkbox" id="askBgTiles" name="askBgTiles" /><span class="check-box"></span
+                      ><span class="check-text"
+                        ><strong>Background as the tiles</strong
+                        ><span class="ct-hint">The card's glass follows Tile opacity.</span></span
+                      ></label
+                    >
+                  </section>
                 </div>
                 <div class="card">
                   <h2 class="card-title">PC metric tiles</h2>
@@ -1113,26 +1170,96 @@
                 </div>
                 <div class="card" id="ledCard">
                   <div class="card-head">
-                    <h2 class="card-title">Status LED</h2>
+                    <h2 class="card-title">LED</h2>
                     <span class="tag" id="ledState">disabled</span>
                   </div>
                   <label class="check-row standalone"
                     ><input type="checkbox" id="ledEnabled" name="ledEnabled" /><span class="check-box"></span
                     ><span class="check-text"
-                      ><strong>Enable status LED</strong
+                      ><strong>Enable the LED</strong
                       ><span class="ct-hint"
-                        >A single-color LED on a GPIO, dimmed by PWM through a transistor driver. Not an
-                        addressable strip, so there is no color to pick.</span
+                        >An addressable strip (WS2812, SK6812) in one color, or a single-color LED dimmed by
+                        PWM through a transistor driver.</span
                       ></span
                     ></label
                   >
                   <div class="subcard hidden" id="ledFields">
                     <div class="grid-2">
                       <div class="field">
+                        <label class="field-label" for="ledType">Type</label
+                        ><select id="ledType" name="ledType">
+                          <option value="1">Addressable strip</option>
+                          <option value="0">Single-color LED (PWM)</option>
+                        </select>
+                      </div>
+                      <div class="field">
                         <label class="field-label" for="ledPin">Signal GPIO</label
                         ><input type="number" id="ledPin" name="ledPin" min="0" max="48" step="1" />
-                        <p class="field-hint">Allowed on this board: <span id="ledAllowedPins">--</span>.</p>
+                        <p class="field-hint">
+                          Allowed on this board: <span id="ledAllowedPins">--</span>. The UART connector's RX
+                          is 44.
+                        </p>
                       </div>
+                    </div>
+                    <div id="ledStripFields">
+                      <div class="grid-2">
+                        <div class="field">
+                          <label class="field-label" for="ledCount">LEDs on the strip</label
+                          ><input type="number" id="ledCount" name="ledCount" min="1" max="60" step="1" />
+                        </div>
+                        <div class="field">
+                          <label class="field-label" for="ledFx">Effect</label
+                          ><select id="ledFx" name="ledFx"></select>
+                          <p class="field-hint">A page of the deck can have its own (Deck page, the page's Light).</p>
+                        </div>
+                      </div>
+                      <div class="grid-2">
+                        <div class="field" id="ledColorField">
+                          <label class="field-label" for="ledColor">Color</label>
+                          <input type="color" id="ledColor" name="ledColor" value="#ffffff" class="led-swatch" />
+                        </div>
+                        <div class="field" id="ledColor2Field">
+                          <label class="field-label" for="ledColor2" id="ledColor2Label">Second color</label>
+                          <input type="color" id="ledColor2" name="ledColor2" value="#0040ff" class="led-swatch" />
+                        </div>
+                      </div>
+                      <div class="grid-2">
+                        <div class="field" id="ledSpeedField">
+                          <label class="field-label" for="ledSpeed" id="ledSpeedLabel">Speed</label>
+                          <div class="range-row">
+                            <input type="range" id="ledSpeed" name="ledSpeed" min="0" max="255" step="1" /><span
+                              class="range-val"
+                              id="ledSpeedVal"
+                              >--</span
+                            >
+                          </div>
+                        </div>
+                        <div class="field" id="ledIntensityField">
+                          <label class="field-label" for="ledIntensity" id="ledIntensityLabel">Intensity</label>
+                          <div class="range-row">
+                            <input
+                              type="range"
+                              id="ledIntensity"
+                              name="ledIntensity"
+                              min="0"
+                              max="255"
+                              step="1"
+                            /><span class="range-val" id="ledIntensityVal">--</span>
+                          </div>
+                        </div>
+                      </div>
+                      <label class="check-row standalone"
+                        ><input type="checkbox" id="ledReverse" name="ledReverse" /><span class="check-box"></span
+                        ><span class="check-text"
+                          ><strong>Reverse direction</strong
+                          ><span class="ct-hint"
+                            >Bars and moving effects start from the other end: tick it if the print progress fills
+                            from right to left.</span
+                          ></span
+                        ></label
+                      >
+                    </div>
+                    <div class="grid-2">
                       <div class="field">
                         <label class="field-label" for="ledBrightness">Brightness</label>
                         <div class="range-row">
@@ -1209,12 +1336,80 @@
                             on.</span
                           ></span
                         ></label
+                      ><label class="check-row"
+                        ><input type="checkbox" id="ledBatteryOff" name="ledBatteryOff" /><span
+                          class="check-box"
+                        ></span
+                        ><span class="check-text"
+                          ><strong>Off on battery</strong
+                          ><span class="ct-hint"
+                            >Lit only with a PC or a charger on the USB. Saves the battery, and a strip
+                            without its 5 V is never fed through its data line.</span
+                          ></span
+                        ></label
                       >
+                    </div>
+                    <div id="ledEventFields">
+                      <p class="field-label" style="margin-top: 14px">Events over the effect</p>
+                      <p class="field-hint">
+                        While one is on, it takes the strip; the worst one wins (error first). Test shows it for a
+                        few seconds.
+                      </p>
+                      <div class="check-list">
+                        <div class="led-ev"
+                          ><label class="check-row"
+                            ><input type="checkbox" id="ledEvError" name="ledEvError" /><span
+                              class="check-box"
+                            ></span
+                            ><span class="check-text"
+                              ><strong>Printer error</strong
+                              ><span class="ct-hint">Red blinking while a printer reports an error.</span></span
+                            ></label
+                          ><button type="button" class="btn" data-led-test="error">Test</button></div
+                        ><div class="led-ev"
+                          ><label class="check-row"
+                            ><input type="checkbox" id="ledEvClaude" name="ledEvClaude" /><span
+                              class="check-box"
+                            ></span
+                            ><span class="check-text"
+                              ><strong>Claude is waiting</strong
+                              ><span class="ct-hint"
+                                >Amber breathing while Claude Code waits on a permission or a question.</span
+                              ></span
+                            ></label
+                          ><button type="button" class="btn" data-led-test="claude">Test</button></div
+                        ><div class="led-ev"
+                          ><label class="check-row"
+                            ><input type="checkbox" id="ledEvDone" name="ledEvDone" /><span
+                              class="check-box"
+                            ></span
+                            ><span class="check-text"
+                              ><strong>Print finished</strong
+                              ><span class="ct-hint"
+                                >Green breathing until you touch the screen or the bed has cooled (30 minutes at
+                                most).</span
+                              ></span
+                            ></label
+                          ><button type="button" class="btn" data-led-test="done">Test</button></div
+                        ><div class="led-ev"
+                          ><label class="check-row"
+                            ><input type="checkbox" id="ledEvProgress" name="ledEvProgress" /><span
+                              class="check-box"
+                            ></span
+                            ><span class="check-text"
+                              ><strong>Print progress</strong
+                              ><span class="ct-hint"
+                                >A bar in the color of the filament in use, breathing while paused.</span
+                              ></span
+                            ></label
+                          ><button type="button" class="btn" data-led-test="progress">Test</button></div
+                        >
+                      </div>
                     </div>
                   </div>
                   <div class="note">
                     <span class="note-k">Wiring</span
-                    ><span
+                    ><span id="ledWiring"
                       >Drive the LED through a transistor, not straight off the GPIO. A pin already used by
                       the display, touch, USB or flash is refused.</span
                     >
@@ -1354,9 +1549,20 @@
                       </div>
                     </div>
                   </div>
+                  <label class="check-row standalone"
+                    ><input type="checkbox" id="radarLed" name="radarLed" /><span class="check-box"></span
+                    ><span class="check-text"
+                      ><strong>Sweep the LED strip</strong
+                      ><span class="ct-hint"
+                        >While the radar is open, the strip shows its green beam passing under the screen, in step
+                        with the one on the disc. Only a printer error or Claude waiting take it over.</span
+                      ></span
+                    ></label
+                  >
                   <p class="field-hint">
-                    Data from adsb.lol, every 12 s while the radar is open. On the screen, tap "RADIUS" to change
-                    the radius and the panel button to change the filter.
+                    Data from adsb.lol, every 12 s while the radar is open or a Flight radar widget is on the screen.
+                    On the screen, tap "RADIUS" to change the radius and the panel button to change the filter. The
+                    widget (Deck page, a widget tile) shows the disc at this radius and opens the radar when tapped.
                   </p>
                 </div>
               </form>
@@ -1589,7 +1795,7 @@
                 <div class="note">
                   <span class="note-k">Info</span
                   ><span
-                    >Import accepts TouchDeck backup files only, validates every setting, and restarts the
+                    >Import accepts CompaDeck backup files only, validates every setting, and restarts the
                     device after a successful restore.</span
                   >
                 </div>
@@ -1618,7 +1824,7 @@
                 <dl class="facts">
                   <div>
                     <dt>Product</dt>
-                    <dd>TouchDeck</dd>
+                    <dd>CompaDeck</dd>
                   </div>
                   <div>
                     <dt>Version</dt>

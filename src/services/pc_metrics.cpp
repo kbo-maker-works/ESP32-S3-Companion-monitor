@@ -230,6 +230,11 @@ static void parseClaude(PcSource* pc, JsonObjectConst c) {
   }
   asciiPunct(cl.status);
   cl.rxMs = millis();
+  // The prompt it waits on: none, or another one, closes the deck's card at once.
+  if (pc->ask.kind && strcmp(c["ask"] | "", pc->ask.id)) {
+    pc->ask.kind = 0;
+    s_version++;
+  }
 
   // Open sessions: [name, state, age, detail] rows; companions without them send none.
   cl.sessionCount = 0;
@@ -276,6 +281,49 @@ static void parseClaude(PcSource* pc, JsonObjectConst c) {
   s_version++;
 }
 
+// The same prompt and question every second: taken in only when it changes.
+static uint32_t s_askSeq = 0;
+
+static void parseAsk(PcSource* pc, JsonObjectConst a) {
+  ClaudeAsk& k = pc->ask;
+  const char* id = a["id"] | "";
+  const char* kind = a["k"] | "";
+  if (!id[0] || strlen(id) >= sizeof(k.id) || (kind[0] != 'p' && kind[0] != 'q')) return;
+  const uint8_t qi = a["qi"] | 0;
+  if (!k.kind || strcmp(k.id, id) || k.qi != qi) {
+    memset(&k, 0, sizeof(k));
+    strlcpy(k.id, id, sizeof(k.id));
+    k.kind = kind[0];
+    strlcpy(k.session, a["s"] | "", sizeof(k.session));
+    strlcpy(k.title, a["t"] | "", sizeof(k.title));
+    strlcpy(k.text, a["x"] | "", sizeof(k.text));
+    strlcpy(k.desc, a["d"] | "", sizeof(k.desc));
+    strlcpy(k.hint, a["h"] | "", sizeof(k.hint));
+    for (JsonVariantConst v : a["o"].as<JsonArrayConst>()) {
+      if (k.optCount >= CLAUDE_ASK_OPTS) break;
+      strlcpy(k.opts[k.optCount], v | "", sizeof(k.opts[0]));
+      asciiPunct(k.opts[k.optCount++]);
+    }
+    int n = 0;
+    for (JsonVariantConst v : a["od"].as<JsonArrayConst>()) {
+      if (n >= k.optCount) break;
+      strlcpy(k.optDesc[n], v | "", sizeof(k.optDesc[0]));
+      asciiPunct(k.optDesc[n++]);
+    }
+    k.multi = k.kind == 'q' && (a["m"] | false);
+    k.qi = qi;
+    k.qn = a["qn"] | 1;
+    for (char* s : {k.session, k.title, k.text, k.desc, k.hint}) asciiPunct(s);
+    if (!k.optCount) {
+      k.kind = 0;  // nothing to tap
+      return;
+    }
+    k.seq = ++s_askSeq;
+    s_version++;
+  }
+  k.rxMs = millis();
+}
+
 static void parsePacket(const char* json, IPAddress from, bool serial) {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, json);
@@ -300,10 +348,12 @@ static void parsePacket(const char* json, IPAddress from, bool serial) {
     if (n < 4) strlcpy(pc->nonces[n++], v | "", sizeof(pc->nonces[0]));
   PcMetricData& d = pc->data;
 
+  JsonObjectConst ask = doc["ask"];
+  if (!ask.isNull()) parseAsk(pc, ask);
   JsonObjectConst claude = doc["claude"];
   if (!claude.isNull()) parseClaude(pc, claude);
-  // A Claude-only packet leaves the metrics and the PC state alone.
-  if (!claude.isNull() && doc["metrics"].isNull() && doc["pcstate"].isNull()) {
+  // A Claude-only or prompt-only packet leaves the metrics and the PC state alone.
+  if ((!claude.isNull() || !ask.isNull()) && doc["metrics"].isNull() && doc["pcstate"].isNull()) {
     d.lastReceived = millis();
     d.online = true;
     return;
@@ -631,6 +681,25 @@ const PcSource* pcClaudePc() {
     if (pc.used && pc.claude.rxMs && (!last || (int32_t)(pc.claude.rxMs - last->claude.rxMs) > 0)) last = &pc;
   }
   return last ? last : act;
+}
+
+// A prompt with no packet for this long is gone (the companion stopped).
+constexpr uint32_t ASK_STALE_MS = 5000;
+
+const ClaudeAsk* pcClaudeAsk(const PcSource** who) {
+  const ClaudeAsk* best = nullptr;
+  const PcSource* bestPc = nullptr;
+  const uint32_t now = millis();
+  for (int i = 0; pcSources && i < MAX_PCS; i++) {
+    const PcSource& pc = pcSources[i];
+    if (!pc.used || !pc.data.online || !pc.paired || !pc.ask.kind || now - pc.ask.rxMs > ASK_STALE_MS) continue;
+    if (!best || (int32_t)(pc.ask.seq - best->seq) < 0) {
+      best = &pc.ask;
+      bestPc = &pc;
+    }
+  }
+  if (who) *who = bestPc;
+  return best;
 }
 
 bool pcClaudeOnline() {

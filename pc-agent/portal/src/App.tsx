@@ -134,7 +134,7 @@ export default function App() {
         <div className="brand">
           <img src="/favicon.svg" alt="" width={28} height={28} />
           <div>
-            <div className="brand-name">TouchDeck Agent</div>
+            <div className="brand-name">CompaDeck Agent</div>
             <div className="brand-sub">{state?.pc_name ?? "…"}</div>
           </div>
         </div>

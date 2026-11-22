@@ -89,6 +89,8 @@ SemaphoreHandle_t s_mux = nullptr;
 Store s_store;
 volatile bool s_active = false;
 volatile uint32_t s_due = 0;
+uint8_t s_holders = 0;           // Holder bits (loop task only)
+uint32_t s_lastStartMs = 0;      // when a fetch was last started
 
 void setState(State st, int code = 0) {
   xSemaphoreTake(s_mux, portMAX_DELAY);
@@ -223,6 +225,7 @@ void run(void*) {
       continue;
     }
     s_due = now + REFRESH_MS;
+    s_lastStartMs = now | 1;
     if (s_store.state != State::Ok) setState(State::Loading);
     fetch();
   }
@@ -238,9 +241,13 @@ void begin() {
   xTaskCreatePinnedToCoreWithCaps(run, "flights", 12288, nullptr, 1, &s_task, 0, MALLOC_CAP_SPIRAM);
 }
 
-void setActive(bool on) {
-  s_active = on;
-  if (on) s_due = 0;  // fetch now
+void setActive(bool on, uint8_t who) {
+  const bool was = s_holders != 0;
+  s_holders = on ? (s_holders | who) : (s_holders & ~who);
+  s_active = s_holders != 0;
+  // Fetch now when it starts, unless the last answer is still fresh (a page
+  // with the widget swiped away and back).
+  if (s_active && !was && (!s_lastStartMs || millis() - s_lastStartMs >= REFRESH_MS)) s_due = 0;
 }
 
 void refreshSoon() { s_due = 0; }

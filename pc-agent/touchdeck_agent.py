@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-TouchDeck PC agent
+CompaDeck PC agent
 ==================
-Feeds the TouchDeck (Guition JC3248W535) from this PC over WiFi:
+Feeds the CompaDeck (Guition JC3248W535) from this PC over WiFi:
 
   * PC metrics for the metric tiles: CPU, RAM, NVIDIA GPU (nvidia-smi), disk,
     network. One UDP packet a second to the deck's port 4210 (V2.1 protocol,
@@ -150,10 +150,21 @@ def session_title(transcript, whole=False):
 
 def run_hook():
     try:
-        payload = json.load(sys.stdin)
-    except ValueError:
+        payload = json.loads(sys.stdin.buffer.read().decode("utf-8-sig"))
+    except (ValueError, UnicodeDecodeError, AttributeError):
+        return
+    if not isinstance(payload, dict):
         return
     event = payload.get("hook_event_name") or ""
+    # A prompt waiting on the deck is over once its tool ran, or the turn ended
+    # or a new one started (td_ask.py).
+    if event in ("PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "Stop", "SessionEnd"):
+        try:
+            import td_ask
+            tool = (payload.get("tool_name") or "") if event.startswith("PostToolUse") else None
+            td_ask.dismiss(payload.get("session_id") or "", tool, payload.get("tool_input") if tool else None)
+        except Exception:
+            pass
     sid = clip(payload.get("session_id") or "default", 64)
     project = os.path.basename((payload.get("cwd") or "").rstrip("\\/")) or "Claude Code"
     path = os.path.join(SESSIONS_DIR, "%s.json" % hashlib.sha1(sid.encode()).hexdigest()[:16])
@@ -227,12 +238,22 @@ def run_hook():
             s.update(mood="happy", status="", working=False)
             set_state("done")
             ev = ("done", name, "turn done")
+    elif event == "PermissionRequest":
+        # The terminal's dialog is up; its Notification brings the mascot's event.
+        ask = payload.get("tool_name") == "AskUserQuestion"
+        s.update(working=False)
+        set_state("input", "Has a question" if ask else "Needs permission")
     write_json_atomic(path, s)
     if ev:
         write_json_atomic(EVENT_FILE, {
             "ev": ev[0], "ev_txt": clip(ev[1], MAX_EV_TXT), "ev_sub": clip(ev[2], MAX_EV_SUB),
             "ev_id": zlib.crc32(("%s|%s|%f" % (sid, ev[0], now)).encode()) or 1, "t": now,
         })
+    if event == "PermissionRequest":
+        # Blocks while the prompt waits on the deck (a hook of its own in
+        # settings.json, not async, with a long timeout: README.md).
+        import td_ask
+        td_ask.run_permission_hook(payload, name)
 
 
 # ---------------------------------------------------------------------------
@@ -734,8 +755,9 @@ def opener(url):
     return run
 
 
-def build_packets(metrics, pc_id, pc_name, pc=None):
-    """This second's packets: one, or two when everything won't fit in one."""
+def build_packets(metrics, pc_id, pc_name, pc=None, asks=None):
+    """This second's packets: one, or two when everything won't fit in one,
+    after the prompt a Claude Code session waits on (td_ask.py), if any."""
     now = time.time()
     pkt = {
         "pc_id": pc_id,
@@ -762,7 +784,31 @@ def build_packets(metrics, pc_id, pc_name, pc=None):
     for p in packets:  # what still doesn't fit is shed, least useful first
         while len(packet_bytes(p)) > PACKET_MAX and shed(p):
             pass
+    # Only once paired: the deck answers with a signed command. The prompt goes
+    # on its own packet (with the nonces, as the deck resets them on every
+    # packet), and Claude's state names it: without it the deck closes the card.
+    ask = asks.current() if asks and "nonces" in pkt else None
+    for p in packets:
+        if "claude" in p:
+            p["claude"]["ask"] = ask["id"] if ask else ""
+    if ask:
+        solo = {k: pkt[k] for k in ("pc_id", "pc_name", "cmd_port", "art_port", "nonces") if k in pkt}
+        solo["ask"] = ask
+        while len(packet_bytes(solo)) > PACKET_MAX and shed_ask(ask):
+            pass
+        packets.insert(0, solo)
     return packets
+
+
+def shed_ask(ask):
+    """Shortens the prompt for the packet: option descriptions, then the text."""
+    if ask.pop("od", None) is not None:
+        return True
+    x = ask.get("x") or ""
+    if len(x.encode()) > 60:
+        ask["x"] = clip(x, len(x.encode()) // 2)
+        return True
+    return False
 
 
 def shed(pkt):
@@ -796,7 +842,7 @@ def packet_bytes(pkt):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="TouchDeck PC agent")
+    ap = argparse.ArgumentParser(description="CompaDeck PC agent")
     ap.add_argument("mode", nargs="?", default="run", choices=["run", "hook", "pair", "settings"],
                     help="run (default), hook (Claude Code), pair (get the key for PC control), "
                          "settings (open the settings page of the running agent)")
@@ -848,7 +894,7 @@ def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     target = Target(args.host)
-    print("TouchDeck agent: %s -> %s:%d" % (pc_name, args.host, DECK_PORT), flush=True)
+    print("CompaDeck agent: %s -> %s:%d" % (pc_name, args.host, DECK_PORT), flush=True)
     worker = start_work(target, pc_id, pc_name, args.verbose)
     awake = start_awake()
     bambu = start_bambu(target, pc_id, pc_name, args.verbose)
@@ -864,16 +910,26 @@ def main():
     handlers["open_agent"] = opener(lambda: portal.url if portal else None)
     handlers["open_deck"] = opener(
         lambda: "http://%s/" % (target.get() if target.get() != BROADCAST else args.host))
+    # Claude Code's permission prompts and questions, answered on the deck.
+    asks = None
+    try:
+        import td_ask
+        asks = td_ask.Asks()
+        handlers["claude:"] = asks.command
+    except Exception as e:
+        print("claude prompts off: %s" % e, flush=True)
     pc = PcSide(pc_id, handlers or None, awake, start_batteries(pc_name), target.get)
     failing = None  # the last send error, logged once (the service's log stays small)
     while True:
         t0 = time.monotonic()
         try:
             addr = target.get()
-            packets = build_packets(metrics, pc_id, pc_name, pc)
+            packets = build_packets(metrics, pc_id, pc_name, pc, asks)
             if addr == BROADCAST:  # the whole LAN hears it: only the PC's name and metrics
                 packets = [{k: v for k, v in packets[-1].items()
                             if k in ("pc_id", "pc_name", "timestamp", "status", "metrics")}]
+            elif asks and pc.commands and pc.keyring.get():
+                asks.beat()  # hooks may wait for the deck's answer
             sizes = []
             for pkt in packets:
                 data = packet_bytes(pkt)

@@ -16,7 +16,7 @@ struct BacklightSettings {
   uint16_t reserved1;            // StatNode's offline sleep delay, unused
 };
 
-// Filament / status LED on a PWM pin. Versioned NVS blob "led"; see led.cpp.
+// Status LED: a PWM LED or an addressable strip. Versioned NVS blob "led"; see led.cpp.
 struct LedSettings {
   uint8_t version;
   uint8_t enabled;
@@ -28,6 +28,24 @@ struct LedSettings {
   uint8_t offlineOff;       // dark while the PC companion is offline
   uint16_t nightStartMinute;  // minute of day, 0..1439; v2, v1 shared the backlight's
   uint16_t nightEndMinute;    // minute of day, 0..1439
+  // v3: what is on the pin.
+  uint8_t type;               // LED_TYPE_PWM or LED_TYPE_STRIP
+  uint8_t count;              // LEDs on the strip, 1..LED_STRIP_MAX
+  uint8_t batteryOff;         // dark while running on the battery
+  uint8_t reserved;
+  uint32_t color;             // the strip's color, 0xRRGGBB (brightness scales it)
+};
+
+// The strip's effect and the events shown over it. Versioned NVS blob "ledfx".
+struct LedFxSettings {
+  uint8_t version;
+  uint8_t effect;     // LED_FX_*
+  uint8_t speed;      // 0..255, slow to fast
+  uint8_t intensity;  // 0..255, what it means depends on the effect
+  uint32_t color2;    // second color, 0xRRGGBB (gradient, background...)
+  uint8_t flags;      // LED_FXF_*
+  uint8_t events;     // LED_EVB_*
+  uint8_t reserved[2];
 };
 
 // Panel and PC metric tile settings, each its own NVS scalar.
@@ -53,6 +71,10 @@ struct DisplaySettings {
   uint8_t  dailyOrient;       // 0 = landscape, 1 = portrait, 2 = both
   uint8_t  dailyCount;        // Daily pictures per orientation, 1..DAILY_MAX_COUNT
   bool     glassAutoText;     // Glass: text colour and tint follow the picture per tile
+  // Glass: Claude Code's prompt cards (deck_ui_card.cpp).
+  uint8_t  askBg;             // the glass behind them, opacity % 0..90, or ASK_BG_TILES
+  uint8_t  askFrame;          // their light edge and their buttons', opacity % 0..100 (0 = none)
+  uint32_t askFrameColor;     // that edge, 0xRRGGBB
   bool     smoothCharts;      // PC metric charts glide between packets
   bool     batteryPct;        // top bar: battery percentage next to its icon
   bool     printerFx;         // printer tiles: heat / frost, turning spool, print head
@@ -122,6 +144,7 @@ struct AudioSettings {
 constexpr uint8_t THEME_MIDNIGHT = 0;
 constexpr uint8_t THEME_DAYLIGHT = 1;
 constexpr uint8_t THEME_GLASS = 2;  // Midnight colours, glass tiles over a wallpaper
+constexpr uint8_t ASK_BG_TILES = 255;  // askBg: as dark as the tiles' glass (glassTint)
 
 // Network settings. NVS blob "net", layout shared with StatNode.
 struct NetworkSettings {
@@ -136,7 +159,7 @@ struct NetworkSettings {
   bool use24h;            // top bar clock: 24h (default) or 12h
   uint8_t dateFormat;     // unused
   bool mdnsEnabled;       // advertise <hostname>.local over mDNS
-  char hostname[32];      // sanitized [a-z0-9-], default "touchdeck"
+  char hostname[32];      // sanitized [a-z0-9-], default "compadeck"
 };
 
 extern char wifiSSID[33];
@@ -146,6 +169,7 @@ extern DisplaySettings dispSettings;
 extern NetworkSettings netSettings;
 extern BacklightSettings backlightSettings;
 extern LedSettings ledSettings;
+extern LedFxSettings ledFxSettings;
 extern AdvancedSettings advSettings;
 extern PresenceSettings presenceSettings;
 extern HapticSettings hapticSettings;
@@ -162,9 +186,10 @@ void defaultDisplaySettings(DisplaySettings& ds);
 void defaultNetworkSettings(NetworkSettings& ns);
 void defaultBacklightSettings(BacklightSettings& bs);
 void defaultLedSettings(LedSettings& ls);
+void defaultLedFxSettings(LedFxSettings& fx);
 
 // Normalize a string into a valid mDNS/DNS label: lowercase, keep only
-// [a-z0-9-], strip leading/trailing hyphens. Falls back to "touchdeck".
+// [a-z0-9-], strip leading/trailing hyphens. Falls back to "compadeck".
 void sanitizeHostname(const char* in, char* out, size_t outSize);
 
 #endif // SETTINGS_H

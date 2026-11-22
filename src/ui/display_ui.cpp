@@ -179,7 +179,7 @@ void initDisplay() {
   if (!deckBegin(dispSettings.rotation)) Serial.println("Display: deck pipeline init FAILED");
   displayTick();  // the splash is on the panel before the light comes on
   pinMode(BACKLIGHT_PIN, OUTPUT);
-  setBacklight(brightness);
+  setBacklight(g_manual_display_off ? 0 : brightness);  // off: a quiet timer wake (hardware/power)
 }
 
 void applyDisplaySettings() {

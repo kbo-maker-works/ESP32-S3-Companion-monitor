@@ -37,6 +37,7 @@ void presenceTick() {
     s_activeMs = now;
     s_presentMs = now | 1;
   }
+  if (appKeepsAwake()) s_activeMs = now;  // e.g. Bench: read across the workbench
   // Night wake holds for the sleep timer after presence ends.
   setNightWakePresence(present || (s_presentMs && p.sleepMin && now - s_presentMs < p.sleepMin * 60000UL));
   const uint32_t touch = touchLastActivity();

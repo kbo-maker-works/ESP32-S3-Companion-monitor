@@ -142,10 +142,23 @@ void rippleStep(void* var, int32_t v) {
   lv_obj_set_style_border_opa(o, (lv_opa_t)(200 * left * left), 0);
 }
 
+// Buttons that are not tiles (Claude's prompt cards) take the touch effect
+// too: each gets a TileRt of its own while it lives (fxTouchBind), found as a
+// tile's is.
+TileRt s_extra[6];  // a card's options and Send
+const TileDef s_extraDef{};  // a box: the effect draws over the button
+
+TileRt* fxRtOf(lv_obj_t* o) {
+  if (TileRt* r = tileOf(o)) return r;
+  for (TileRt& r : s_extra)
+    if (r.obj && r.obj == o) return &r;
+  return nullptr;
+}
+
 // The touch effect's object is r.fx, a child of the tile.
 void touchDone(lv_anim_t* a) {
   lv_obj_t* o = (lv_obj_t*)a->var;
-  if (TileRt* r = tileOf(lv_obj_get_parent(o)))
+  if (TileRt* r = fxRtOf(lv_obj_get_parent(o)))
     if (r->fx == o) r->fx = nullptr;
   lv_obj_delete_async(o);
 }
@@ -810,7 +823,7 @@ PageFx fxPage() { return fx().page; }
 void fxQuiet() { s_quietUntil = millis() + 800; }
 
 void fxPressed(lv_event_t* e) {
-  TileRt* r = tileOf((lv_obj_t*)lv_event_get_current_target(e));
+  TileRt* r = fxRtOf((lv_obj_t*)lv_event_get_current_target(e));
   lv_indev_t* in = lv_indev_active();
   if (!r || !in || r->def->noBox) return;  // a touch effect would draw the box it has not
   if (lv_event_get_code(e) != LV_EVENT_PRESSED) {  // released or lost
@@ -951,6 +964,85 @@ void fxCardClose(lv_obj_t* card, int tileIdx) {
   }
   closeModal();
   if (morph) compBeginMorph(m, kind == CARD_REVEAL ? REVEAL_BACK_MS : kind == CARD_SHEET ? SHEET_BACK_MS : MORPH_BACK_MS, ++s_gen);
+}
+
+namespace {
+void extraGone(lv_event_t* e) {
+  TileRt* r = (TileRt*)lv_event_get_user_data(e);
+  r->obj = r->fx = nullptr;  // the effect went with it
+  r->pressMs = 0;
+}
+
+FxCard s_promptFx = CARD_NONE;  // the open prompt card's effect, its close plays the same
+lv_point_t s_promptAt = {};
+
+// The prompt card's scene, morphing between the card and a small disc at `at`.
+MorphScene promptScene(lv_obj_t* card, bool open) {
+  MorphScene m = cardScene(card);
+  const FrameRect dot = {(int16_t)(s_promptAt.x - 12), (int16_t)(s_promptAt.y - 12), 24, 24};
+  const FrameRect full = rectOf(card);
+  const int16_t r = (int16_t)lv_obj_get_style_radius(card, LV_PART_MAIN);
+  m.from = open ? dot : full;
+  m.to = open ? full : dot;
+  m.r0 = open ? 12 : r;
+  m.r1 = open ? r : 12;
+  m.dim = 2;  // the scrim fades with the card
+  m.open = open;
+  if (s_promptFx == CARD_REVEAL || s_promptFx == CARD_SHEET) {  // the card stays where it is
+    m.from = m.to = full;
+    m.r0 = m.r1 = r;
+    m.reveal = s_promptFx == CARD_REVEAL;
+    m.sheet = s_promptFx == CARD_SHEET;
+    m.cx = (int16_t)s_promptAt.x;
+    m.cy = (int16_t)s_promptAt.y;
+  }
+  return m;
+}
+
+uint32_t promptMs(bool open) {
+  if (s_promptFx == CARD_REVEAL) return open ? REVEAL_MS : REVEAL_BACK_MS;
+  if (s_promptFx == CARD_SHEET) return open ? SHEET_MS : SHEET_BACK_MS;
+  return open ? MORPH_MS : MORPH_BACK_MS;
+}
+}  // namespace
+
+void fxTouchBind(lv_obj_t* b) {
+  for (TileRt& r : s_extra) {
+    if (r.obj) continue;
+    r.obj = b;
+    r.def = &s_extraDef;
+    r.fx = nullptr;
+    r.pressMs = 0;
+    lv_obj_add_event_cb(b, fxPressed, LV_EVENT_PRESSED, nullptr);
+    lv_obj_add_event_cb(b, fxPressed, LV_EVENT_RELEASED, nullptr);
+    lv_obj_add_event_cb(b, fxPressed, LV_EVENT_PRESS_LOST, nullptr);
+    lv_obj_add_event_cb(b, extraGone, LV_EVENT_DELETE, &r);
+    return;
+  }
+}
+
+// A card with no tile under it (a Claude Code prompt): the display's card
+// effect from the point `at` (screen coords) instead of a tile. The card is
+// built; with no effect, or the compositor busy, it just shows.
+void fxPromptOpen(lv_obj_t* card, lv_point_t at) {
+  s_promptFx = fx().card;
+  s_promptAt = at;
+  if (s_promptFx == CARD_NONE || compMode() != COMP_NONE || !snapCard(card)) return;
+  compBeginMorph(promptScene(card, true), promptMs(true), ++s_gen);
+}
+
+// Its effect backwards, over the page; remove() takes the card away. Only
+// over the page alone: an app or a card under it would not be in the picture.
+void fxPromptClose(lv_obj_t* card, void (*remove)()) {
+  const bool morph = s_promptFx != CARD_NONE && card && !modalShown() && !frameActive() && snapCard(card) &&
+                     snapPage(sh.active);
+  MorphScene m = {};
+  if (morph) {
+    m = promptScene(card, false);
+    m.base = sh.src[sh.active];
+  }
+  remove();
+  if (morph) compBeginMorph(m, promptMs(false), ++s_gen);
 }
 
 }  // namespace deckui

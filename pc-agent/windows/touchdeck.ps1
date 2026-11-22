@@ -1,4 +1,4 @@
-# TouchDeck PC agent on demand (Windows). It runs in the background with no
+# CompaDeck PC agent on demand (Windows). It runs in the background with no
 # window (pythonw) and logs to %LOCALAPPDATA%\TouchDeck\agent.log, which the
 # settings page shows under Logs. Run it through touchdeck.cmd beside it.
 #
@@ -117,7 +117,7 @@ switch ($Action) {
             $lnk.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" $a"
             $lnk.WorkingDirectory = $Here
             $lnk.WindowStyle = 7
-            $lnk.Description = "TouchDeck agent: $a"
+            $lnk.Description = "CompaDeck agent: $a"
             $lnk.Save()
             Write-Host $path
         }

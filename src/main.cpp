@@ -1,4 +1,4 @@
-// TouchDeck - firmware entry point.
+// CompaDeck - firmware entry point.
 // Boot: settings -> display (splash) -> WiFi (STA or AP setup) -> web/OTA
 // server -> UDP metric listener. PC metric, HTTP and printer tiles live on the
 // deck pages (deck_ui); the PC companion pushes V2.1 JSON to UDP :4210.
@@ -15,6 +15,7 @@
 #include "hardware/led.h"
 #include "hardware/haptic.h"
 #include "hardware/audio.h"
+#include "hardware/power.h"
 #include "core/crash_log.h"
 #include "services/deck_daily.h"
 #include "hardware/deck_sd.h"
@@ -40,6 +41,7 @@ void setup() {
   Serial.println(PRODUCT_NAME " " FW_VERSION " boot");
   Serial.printf("Reset reason: %d\n", (int)esp_reset_reason());
   crashLogBegin();
+  powerBootBegin();  // before initDisplay: a timer wake keeps the screen dark
   // The core keeps mallocs up to 4 KB internal; 128 B doubles free internal RAM.
   heap_caps_malloc_extmem_enable(128);
   // mbedTLS (this build: CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC) in PSRAM for every TLS
@@ -89,6 +91,7 @@ void loop() {
   handleWiFi();
   handleWebServer();
   pcMetricsHandle();
+  powerTick();  // on battery without WiFi: deep sleep
 
   // Finish boot/connect transitions.
   ScreenState s = getScreenState();

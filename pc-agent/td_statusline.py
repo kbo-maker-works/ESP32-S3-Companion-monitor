@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Claude Code status line for the TouchDeck: the plan's quotas and each
+Claude Code status line for the CompaDeck: the plan's quotas and each
 session's context for the AI app and the "Claude usage" widget.
 
 Claude Code runs the status line command on every update and pipes it a JSON

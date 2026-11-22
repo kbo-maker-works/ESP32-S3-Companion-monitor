@@ -1,4 +1,4 @@
-// TouchDeck web portal, JSON APIs, live screen capture, OTA update, and
+// CompaDeck web portal, JSON APIs, live screen capture, OTA update, and
 // captive-portal redirects. Static UI assets are streamed from PROGMEM in
 // bounded chunks so the full page is never assembled in heap.
 #include "network/web_server.h"
@@ -26,6 +26,7 @@
 #include "core/crash_log.h"
 #include "hardware/battery.h"
 #include "apps/app.h"
+#include "apps/app_bench.h"
 #include "widgets/widget.h"
 #include "core/companion_settings.h"
 #include "services/flight_service.h"
@@ -148,6 +149,56 @@ static long clampedArg(const char* name, long current, long minValue, long maxVa
   return value;
 }
 
+// "#RRGGBB", as a colour input sends it and the portal shows it.
+static String hexColor(uint32_t rgb) {
+  char s[8];
+  snprintf(s, sizeof(s), "#%06X", (unsigned)(rgb & 0xFFFFFF));
+  return String(s);
+}
+
+static bool parseHexColor(const char* s, uint32_t& out) {
+  if (!s || s[0] != '#' || strlen(s) != 7) return false;
+  for (int i = 1; i < 7; i++)
+    if (!isxdigit((unsigned char)s[i])) return false;
+  out = (uint32_t)strtoul(s + 1, nullptr, 16);
+  return true;
+}
+
+// The strip's color from the "ledColor" form field; `current` when absent or malformed.
+static uint32_t ledColorArg(uint32_t current) {
+  uint32_t rgb = current;
+  return server.hasArg("ledColor") && parseHexColor(server.arg("ledColor").c_str(), rgb) ? rgb : current;
+}
+
+// The strip effect fields of the Hardware form over fx; the event boxes only
+// on a save (a preview shows no events).
+static void ledFxFromArgs(LedFxSettings& fx, bool events) {
+  fx.effect = (uint8_t)clampedArg("ledFx", fx.effect, 0, LED_FX_COUNT - 1);
+  fx.speed = (uint8_t)clampedArg("ledSpeed", fx.speed, 0, 255);
+  fx.intensity = (uint8_t)clampedArg("ledIntensity", fx.intensity, 0, 255);
+  uint32_t c2 = fx.color2;
+  if (server.hasArg("ledColor2") && parseHexColor(server.arg("ledColor2").c_str(), c2)) fx.color2 = c2;
+  fx.flags = server.hasArg("ledReverse") ? LED_FXF_REVERSE : 0;
+  if (!events) return;
+  fx.events = (server.hasArg("ledEvProgress") ? LED_EVB_PROGRESS : 0) |
+              (server.hasArg("ledEvDone") ? LED_EVB_DONE : 0) |
+              (server.hasArg("ledEvError") ? LED_EVB_ERROR : 0) |
+              (server.hasArg("ledEvClaude") ? LED_EVB_CLAUDE : 0);
+}
+
+static void ledFxJson(JsonObject led, const LedFxSettings& fx, bool hex) {
+  led["fx"] = fx.effect;
+  led["speed"] = fx.speed;
+  led["intensity"] = fx.intensity;
+  if (hex) led["color2"] = hexColor(fx.color2);
+  else led["color2"] = fx.color2;
+  led["reverse"] = (fx.flags & LED_FXF_REVERSE) != 0;
+  led["evProgress"] = (fx.events & LED_EVB_PROGRESS) != 0;
+  led["evDone"] = (fx.events & LED_EVB_DONE) != 0;
+  led["evError"] = (fx.events & LED_EVB_ERROR) != 0;
+  led["evClaude"] = (fx.events & LED_EVB_CLAUDE) != 0;
+}
+
 static void formatMinuteOfDay(uint16_t minute, char* out, size_t outSize) {
   snprintf(out, outSize, "%02u:%02u", minute / 60, minute % 60);
 }
@@ -217,6 +268,9 @@ static void handleApiConfig() {
   display["dailyCount"] = dispSettings.dailyCount;
   display["glassOn"] = dispSettings.glassOn;
   display["glassAutoText"] = dispSettings.glassAutoText;
+  display["askBg"] = dispSettings.askBg;
+  display["askFrame"] = dispSettings.askFrame;
+  display["askFrameColor"] = hexColor(dispSettings.askFrameColor);
   display["smoothCharts"] = dispSettings.smoothCharts;
   display["batteryPct"] = dispSettings.batteryPct;
   display["printerFx"] = dispSettings.printerFx;
@@ -248,6 +302,12 @@ static void handleApiConfig() {
   led["nightEnd"] = timeBuf;
   led["followDisplay"] = ledSettings.followDisplay != 0;
   led["offlineOff"] = ledSettings.offlineOff != 0;
+  led["type"] = ledSettings.type;
+  led["count"] = ledSettings.count;
+  led["maxCount"] = LED_STRIP_MAX;
+  led["color"] = hexColor(ledSettings.color);
+  led["batteryOff"] = ledSettings.batteryOff != 0;
+  ledFxJson(led, ledFxSettings, true);
   doc["advanced"]["printers"] = advSettings.printers;
   printerSettingsJson(doc["printers"].to<JsonObject>());
   presenceJson(doc["presence"].to<JsonObject>());
@@ -294,6 +354,7 @@ static void handleApiConfig() {
     cp["lon"] = cs.lon;
     cp["radarKm"] = cs.radarKm;
     cp["radarGnd"] = cs.radarGnd;
+    cp["radarLed"] = cs.radarLed;
   }
 
   // Apps a tile can open ("On tap > App" in the tile editor).
@@ -402,6 +463,9 @@ static void handleConfigExport() {
   display["dailyCount"] = dispSettings.dailyCount;
   display["glassOn"] = dispSettings.glassOn;
   display["glassAutoText"] = dispSettings.glassAutoText;
+  display["askBg"] = dispSettings.askBg;
+  display["askFrame"] = dispSettings.askFrame;
+  display["askFrameColor"] = hexColor(dispSettings.askFrameColor);
   display["smoothCharts"] = dispSettings.smoothCharts;
   display["batteryPct"] = dispSettings.batteryPct;
   display["printerFx"] = dispSettings.printerFx;
@@ -427,6 +491,11 @@ static void handleConfigExport() {
   led["nightEndMinute"] = ledSettings.nightEndMinute;
   led["followDisplay"] = ledSettings.followDisplay != 0;
   led["offlineOff"] = ledSettings.offlineOff != 0;
+  led["type"] = ledSettings.type;
+  led["count"] = ledSettings.count;
+  led["color"] = ledSettings.color;
+  led["batteryOff"] = ledSettings.batteryOff != 0;
+  ledFxJson(led, ledFxSettings, false);
   JsonObject haptic = doc["haptic"].to<JsonObject>();
   haptic["enabled"] = hapticSettings.enabled;
   haptic["pin"] = hapticSettings.pin;
@@ -466,7 +535,7 @@ static void handleConfigExport() {
   out += "}}";
   server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   server.sendHeader("Content-Disposition",
-                    "attachment; filename=touchdeck-config.json");
+                    "attachment; filename=compadeck-config.json");
   server.send(200, "application/json", out);
 }
 
@@ -532,7 +601,7 @@ static void printerSettingsJson(JsonObject o) {
 static void handleConfigImport() {
   const String& body = server.arg("plain");
   if (body.length() == 0) {
-    sendJsonMessage(400, false, "Choose a TouchDeck backup file.");
+    sendJsonMessage(400, false, "Choose a CompaDeck backup file.");
     return;
   }
   if (body.length() > CONFIG_IMPORT_MAX_BYTES) {
@@ -555,7 +624,7 @@ static void handleConfigImport() {
   String error;
   if (!readBackupString(root, "format", 40, format, error, "format") ||
       strcmp(format, CONFIG_BACKUP_FORMAT) != 0) {
-    sendJsonMessage(400, false, "This is not a TouchDeck configuration backup.");
+    sendJsonMessage(400, false, "This is not a CompaDeck configuration backup.");
     return;
   }
   long integer = 0;
@@ -580,6 +649,7 @@ static void handleConfigImport() {
   NetworkSettings nextNetwork = netSettings;
   BacklightSettings nextBacklight = backlightSettings;
   LedSettings nextLed = ledSettings;
+  LedFxSettings nextFx = ledFxSettings;
   uint8_t nextBrightness = brightness;
   bool nextHeader = deckHeaderVisible();
   bool flag = false;
@@ -625,6 +695,9 @@ static void handleConfigImport() {
   nextDisplay.dailyCount = displayDefaults.dailyCount;
   nextDisplay.glassOn = displayDefaults.glassOn;
   nextDisplay.glassAutoText = displayDefaults.glassAutoText;
+  nextDisplay.askBg = displayDefaults.askBg;
+  nextDisplay.askFrame = displayDefaults.askFrame;
+  nextDisplay.askFrameColor = displayDefaults.askFrameColor;
   nextDisplay.smoothCharts = displayDefaults.smoothCharts;
   nextDisplay.batteryPct = displayDefaults.batteryPct;
   nextDisplay.printerFx = displayDefaults.printerFx;
@@ -661,6 +734,17 @@ static void handleConfigImport() {
   }
   if (!display["glassOn"].isNull()) READ_INT(display, "glassOn", 20, 100, nextDisplay.glassOn, uint8_t);
   if (!display["glassAutoText"].isNull()) READ_BOOL(display, "glassAutoText", nextDisplay.glassAutoText);
+  if (!display["askBg"].isNull()) READ_INT(display, "askBg", 0, 255, nextDisplay.askBg, uint8_t);
+  if (nextDisplay.askBg > 90 && nextDisplay.askBg != ASK_BG_TILES) {
+    sendJsonMessage(400, false, "invalid askBg");
+    return;
+  }
+  if (!display["askFrame"].isNull()) READ_INT(display, "askFrame", 0, 100, nextDisplay.askFrame, uint8_t);
+  if (!display["askFrameColor"].isNull() &&
+      !parseHexColor(display["askFrameColor"] | "", nextDisplay.askFrameColor)) {
+    sendJsonMessage(400, false, "invalid askFrameColor");
+    return;
+  }
   if (!display["smoothCharts"].isNull()) READ_BOOL(display, "smoothCharts", nextDisplay.smoothCharts);
   if (!display["batteryPct"].isNull()) READ_BOOL(display, "batteryPct", nextDisplay.batteryPct);
   if (!display["printerFx"].isNull()) READ_BOOL(display, "printerFx", nextDisplay.printerFx);
@@ -691,6 +775,34 @@ static void handleConfigImport() {
   }
   READ_BOOL(led, "followDisplay", nextLed.followDisplay);
   READ_BOOL(led, "offlineOff", nextLed.offlineOff);
+  if (!led["type"].isNull()) {
+    READ_INT(led, "type", LED_TYPE_PWM, LED_TYPE_STRIP, nextLed.type, uint8_t);
+    READ_INT(led, "count", 1, LED_STRIP_MAX, nextLed.count, uint8_t);
+    READ_INT(led, "color", 0, 0xFFFFFF, nextLed.color, uint32_t);
+    READ_BOOL(led, "batteryOff", nextLed.batteryOff);
+  } else {
+    // Older backup: no strip, a PWM LED.
+    nextLed.type = LED_TYPE_PWM;
+    nextLed.batteryOff = 0;
+  }
+  if (!led["fx"].isNull()) {
+    bool b = false;
+    READ_INT(led, "fx", 0, LED_FX_COUNT - 1, nextFx.effect, uint8_t);
+    READ_INT(led, "speed", 0, 255, nextFx.speed, uint8_t);
+    READ_INT(led, "intensity", 0, 255, nextFx.intensity, uint8_t);
+    READ_INT(led, "color2", 0, 0xFFFFFF, nextFx.color2, uint32_t);
+    READ_BOOL(led, "reverse", b);
+    nextFx.flags = b ? LED_FXF_REVERSE : 0;
+    nextFx.events = 0;
+    READ_BOOL(led, "evProgress", b);
+    if (b) nextFx.events |= LED_EVB_PROGRESS;
+    READ_BOOL(led, "evDone", b);
+    if (b) nextFx.events |= LED_EVB_DONE;
+    READ_BOOL(led, "evError", b);
+    if (b) nextFx.events |= LED_EVB_ERROR;
+    READ_BOOL(led, "evClaude", b);
+    if (b) nextFx.events |= LED_EVB_CLAUDE;
+  }
   const bool sdPin = nextLed.pin >= 10 && nextLed.pin <= 13;
   if (nextLed.enabled && (sdPin ? nextDisplay.sdCard : !ledPinAllowed(nextLed.pin))) {
     sendJsonMessage(400, false, "The backup uses an LED GPIO this board does not allow.");
@@ -832,6 +944,7 @@ static void handleConfigImport() {
   netSettings = nextNetwork;
   backlightSettings = nextBacklight;
   ledSettings = nextLed;
+  ledFxSettings = nextFx;
   hapticSettings = nextHaptic;
   brightness = nextBrightness;
   advSettings.printers = nextPrinters;
@@ -898,6 +1011,12 @@ static void handleSaveHardware() {
   nextLed.nightEndMinute = minuteOfDayArg("ledNightEnd", nextLed.nightEndMinute);
   nextLed.followDisplay = server.hasArg("ledFollowDisplay") ? 1 : 0;
   nextLed.offlineOff = server.hasArg("ledOfflineOff") ? 1 : 0;
+  nextLed.batteryOff = server.hasArg("ledBatteryOff") ? 1 : 0;
+  nextLed.type = (uint8_t)clampedArg("ledType", nextLed.type, LED_TYPE_PWM, LED_TYPE_STRIP);
+  nextLed.count = (uint8_t)clampedArg("ledCount", nextLed.count, 1, LED_STRIP_MAX);
+  nextLed.color = ledColorArg(nextLed.color);
+  LedFxSettings nextFx = ledFxSettings;
+  ledFxFromArgs(nextFx, true);
   if (nextLed.enabled && !ledPinAllowed(nextLed.pin)) {
     sendJsonMessage(400, false,
                     "That LED GPIO is reserved, in use, or unsupported on this board.");
@@ -936,6 +1055,7 @@ static void handleSaveHardware() {
     strlcpy(targets[i], v.c_str(), AUDIO_FILE_LEN);
   }
   ledSettings = nextLed;
+  ledFxSettings = nextFx;
   hapticSettings = nextHaptic;
   audioSettings = nextAudio;
   saveSettings();
@@ -957,6 +1077,15 @@ static void handleLedPreview() {
   const uint8_t pin = (uint8_t)clampedArg("ledPin", ledSettings.pin, 0, 48);
   const uint8_t level =
     (uint8_t)clampedArg("ledBrightness", ledSettings.brightness, 0, 255);
+  LedSettings cfg = ledSettings;
+  cfg.enabled = enabled;
+  cfg.pin = pin;
+  cfg.brightness = level;
+  cfg.type = (uint8_t)clampedArg("ledType", ledSettings.type, LED_TYPE_PWM, LED_TYPE_STRIP);
+  cfg.count = (uint8_t)clampedArg("ledCount", ledSettings.count, 1, LED_STRIP_MAX);
+  cfg.color = ledColorArg(ledSettings.color);
+  LedFxSettings fx = ledFxSettings;
+  ledFxFromArgs(fx, false);
   if (server.hasArg("stop")) {
     clearLedPreview();
     sendJsonMessage(200, true, "Preview ended.");
@@ -967,8 +1096,26 @@ static void handleLedPreview() {
                     "That LED GPIO is reserved, in use, or unsupported on this board.");
     return;
   }
-  previewLed(enabled, pin, level);
+  previewLed(cfg, fx);
   sendJsonMessage(200, true, "Preview applied.");
+}
+
+// Hardware page: the Test button of an LED event, a few seconds on the strip.
+static void handleLedTest() {
+  static const char* const kNames[] = {"", "progress", "done", "claude", "error"};
+  const String ev = server.arg("event");
+  uint8_t kind = 0;
+  for (uint8_t i = 1; i < 5; i++)
+    if (ev == kNames[i]) kind = i;
+  if (!kind) {
+    sendJsonMessage(400, false, "Unknown LED event.");
+    return;
+  }
+  if (!ledTestEvent(kind)) {
+    sendJsonMessage(400, false, "Enable the strip and save it first.");
+    return;
+  }
+  sendJsonMessage(200, true, "Testing on the strip.");
 }
 
 static void handleHapticTest() {
@@ -1232,6 +1379,12 @@ static void handleSaveDisplay() {
   dispSettings.glassBlur = (uint8_t)clampedArg("glassBlur", dispSettings.glassBlur, 0, 24);
   dispSettings.glassDim = (uint8_t)clampedArg("glassDim", dispSettings.glassDim, 0, 60);
   dispSettings.glassOn = (uint8_t)clampedArg("glassOn", dispSettings.glassOn, 20, 100);
+  // Claude Code's prompt cards: drawn when they open, nothing to rebuild.
+  dispSettings.askBg = server.hasArg("askBgTiles") ? ASK_BG_TILES
+                       : (uint8_t)clampedArg("askBg", dispSettings.askBg == ASK_BG_TILES ? dispSettings.glassTint
+                                                                                     : dispSettings.askBg, 0, 90);
+  dispSettings.askFrame = (uint8_t)clampedArg("askFrame", dispSettings.askFrame, 0, 100);
+  if (server.hasArg("askFrameColor")) parseHexColor(server.arg("askFrameColor").c_str(), dispSettings.askFrameColor);
   const bool glassChanged = oldAuto != dispSettings.glassAutoText ||
                             oldGlass != (uint32_t)(dispSettings.glassOn << 24 | dispSettings.glassTint << 16 |
                                                    dispSettings.glassBlur << 8 | dispSettings.glassDim);
@@ -1300,6 +1453,7 @@ static void handleSaveApps() {
     next.radarKm = (uint8_t)km;
   }
   if (server.hasArg("radarGnd")) next.radarGnd = (uint8_t)constrain(server.arg("radarGnd").toInt(), 0, 2);
+  if (server.hasArg("radarKm")) next.radarLed = server.hasArg("radarLed");  // a box: absent = off, on the Apps form
   // The PC agent: pcMode = the global one ("" = Auto), pc_<app> = an app's own.
   auto knownPc = [](const String& id) { return !id.length() || pcSource(id) != nullptr; };
   if (server.hasArg("pcMode") && knownPc(server.arg("pcMode"))) pcSetActiveMode(server.arg("pcMode").c_str());
@@ -1532,6 +1686,12 @@ static void handleApiStatus() {
   doc["led_pin_valid"] = ledPinValid();
   doc["led_duty"] = ledCurrentDuty();
   doc["led_night"] = ledNightActive();
+  doc["led_battery"] = ledBatteryHeld();
+  {
+    static const char* const kEv[] = {"", "progress", "done", "claude", "error"};
+    const uint8_t ev = ledEventNow();
+    doc["led_event"] = kEv[ev < 5 ? ev : 0];
+  }
   doc["free_heap"]    = ESP.getFreeHeap();
   doc["max_block"]    = ESP.getMaxAllocHeap();
   doc["internal_free"] = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
@@ -2405,6 +2565,98 @@ static void handlePcPrinters() {
   sendJsonMessage(200, true, "OK");
 }
 
+// Bench sheets (app_bench.h, pc-agent/td_bench.py) come only from a PC the deck
+// already knows, from the address its metrics come from.
+static bool benchFromKnownPc(const String& id) {
+  const PcSource* pc = id.length() ? pcSource(id) : nullptr;
+  return pc && (pc->ip == server.client().remoteIP() || pc->viaSerial);
+}
+
+// POST /api/pc/bench {"pc_id", "title", "text"}: a text sheet, one step per line.
+static void handlePcBench() {
+  const String& body = server.arg("plain");
+  if (!body.length() || body.length() > BENCH_MAX_TEXT + 1024) {
+    sendJsonMessage(400, false, "Expected a JSON body with up to 8 KB of text");
+    return;
+  }
+  JsonDocument doc(psramJson());
+  if (deserializeJson(doc, body)) {
+    sendJsonMessage(400, false, "bad JSON");
+    return;
+  }
+  if (!benchFromKnownPc(doc["pc_id"] | "")) {
+    sendJsonMessage(403, false, "unknown PC (its agent must be sending metrics)");
+    return;
+  }
+  String err;
+  if (!benchPushText(doc["title"] | "", doc["text"] | "", err)) {
+    sendJsonMessage(400, false, err.c_str());
+    return;
+  }
+  sendJsonMessage(200, true, "On the bench");
+}
+
+// GET /api/pc/bench: the current sheet.
+static void handlePcBenchGet() {
+  String out;
+  benchJson(out);
+  server.send(200, "application/json", out);
+}
+
+// POST /api/pc/bench/image?pc_id=<id>&title=<text>, multipart field "image": a
+// baseline JPEG of at most 800 x 600 pixels (480 000) and 400 KB.
+static File benchUpload;
+static String benchUploadError;
+static bool benchUploadDone;
+
+static void handlePcBenchUpload() {
+  if (!multipartRequest()) return;
+  HTTPUpload& up = server.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    benchUploadError = "";
+    benchUploadDone = false;
+    if (benchUpload) benchUpload.close();
+    if (!benchFromKnownPc(server.arg("pc_id"))) benchUploadError = "unknown PC (its agent must be sending metrics)";
+    else if (!benchStorageReady()) benchUploadError = "file system not available";
+    else {
+      const String path = benchUploadPath();
+      deck::wallFs().remove(path);
+      benchUpload = deck::wallFs().open(path, "w");
+      if (!benchUpload) benchUploadError = "cannot create the file";
+    }
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    esp_task_wdt_reset();
+    if (benchUploadError.length() || !benchUpload) return;
+    if (benchUpload.size() + up.currentSize > BENCH_MAX_JPEG) benchUploadError = "the JPEG is larger than 400 KB";
+    else if (benchUpload.write(up.buf, up.currentSize) != up.currentSize) benchUploadError = "storage full";
+  } else if (up.status == UPLOAD_FILE_END || up.status == UPLOAD_FILE_ABORTED) {
+    if (benchUpload) benchUpload.close();
+    if (up.status == UPLOAD_FILE_ABORTED) benchUploadError = "upload aborted";
+    benchUploadDone = up.status == UPLOAD_FILE_END && !benchUploadError.length();
+  }
+}
+
+static void handlePcBenchImage() {
+  String err = benchUploadError;
+  const bool done = benchUploadDone;
+  benchUploadError = "";
+  benchUploadDone = false;
+  if (!err.length() && (!multipartRequest() || !done)) err = "expected a JPEG file upload (field \"image\")";
+  if (!err.length()) benchPushImage(server.arg("title").c_str(), err);
+  if (err.length()) {
+    if (err.startsWith("unknown PC")) sendJsonMessage(403, false, err.c_str());
+    else sendJsonMessage(400, false, err.c_str());
+    return;
+  }
+  sendJsonMessage(200, true, "On the bench");
+}
+
+// POST /api/deck/benchapp?op=next|back|zoom|fit[&x=&y=] - bench hook, taps on the open Bench app.
+static void handleDeckBenchApp() {
+  const bool ok = benchTestOp(server.arg("op"), server.arg("x").toInt(), server.arg("y").toInt());
+  sendJsonMessage(ok ? 200 : 409, ok, ok ? "OK" : "Not possible now");
+}
+
 // POST /api/pc/active?id=<pc_id> pins the active PC; id "" = Auto.
 static void handlePcActive() {
   const String id = server.arg("id");
@@ -2641,6 +2893,7 @@ void initWebServer() {
   server.on("/save/advanced", HTTP_POST, handleSaveAdvanced);
   server.on("/save/printers", HTTP_POST, handleSavePrinters);
   server.on("/led/preview", HTTP_POST, handleLedPreview);
+  server.on("/led/test", HTTP_POST, handleLedTest);
   server.on("/haptic/test", HTTP_POST, handleHapticTest);
   server.on("/api/audio", HTTP_GET, handleAudioGet);
   server.on("/api/audio/test", HTTP_POST, handleAudioTest);
@@ -2666,6 +2919,10 @@ void initWebServer() {
   server.on("/api/pc/active", HTTP_POST, handlePcActive);
   server.on("/api/pc/work", HTTP_POST, handlePcWork);
   server.on("/api/pc/printers", HTTP_POST, handlePcPrinters);
+  server.on("/api/pc/bench", HTTP_POST, handlePcBench);
+  server.on("/api/pc/bench", HTTP_GET, handlePcBenchGet);
+  server.on("/api/pc/bench/image", HTTP_POST, handlePcBenchImage, handlePcBenchUpload);
+  server.on("/api/deck/benchapp", HTTP_POST, handleDeckBenchApp);
   server.on("/api/pc/status", HTTP_GET, handlePcStatus);
   server.on("/api/pc/pair", HTTP_POST, handlePcPair);
   server.on("/api/pc/pair/confirm", HTTP_POST, handlePcPairConfirm);

@@ -326,7 +326,7 @@ void qpSyncValues();
 void qpUpdateStatus(bool force);
 lv_obj_t* qpButton(lv_obj_t* parent, int x, int y, int w, const char* text, bool checkable);
 const uint16_t* lastFrame();
-lv_draw_buf_t* frostedCopy(int x, int y, int w, int h, int rad);
+lv_draw_buf_t* frostedCopy(int x, int y, int w, int h, int rad, int tintPct = -1);
 void frostStyle(lv_obj_t* o, lv_draw_buf_t* glass);
 void buildQuickPanel();
 void destroyQuickPanel();
@@ -353,11 +353,29 @@ bool edTestPick(int i);
 // Full-screen app (app.h) in the card slot: opens from and closes into its tile.
 void openApp(int tileIdx, const String& id);
 bool appShown();
+// The open app holds the screen on (app::Def::awake).
+bool appKeepsAwake();
+// The open app's id, "" when none is open.
+const char* openAppId();
+// A widget's state (TileRt::wstate) whose tile is on screen right now: its
+// page shown and lit, no app, card, editor or photo frame over it. For the
+// widgets that animate or fetch only while seen.
+bool widgetOnScreen(const void* wstate);
+// An app is about to open: widgets let go of their big buffers (Def::release).
+void widgetsRelease();
 void appTick();
 void onConfirmOk(lv_event_t*);
 void openConfirm(int tileIdx, bool hold);
 void openPrinterErrors(const String& title, const PrinterState& s);
 void pairSync();
+// Claude Code's permission prompts and questions (pcClaudeAsk): askWake lights
+// the screen for a new one (every tick, the picture frame included), askSync
+// opens and closes its card.
+void askWake();
+void askSync();
+// The LED strip's event over its effect (deck_ui_printer.cpp): printer error,
+// Claude waiting, a finished print, a print's progress.
+void ledEventsTick();
 
 // deck_ui_fit.cpp
 lv_obj_t* makeRoot(int w, int h);
@@ -449,6 +467,11 @@ void fxTileOn(TileRt& r, bool wasOn);
 void fxCardOpenBegin(int tileIdx, deck::FrameRect to, int r1);
 void fxCardOpen(lv_obj_t* card, int tileIdx);
 void fxCardClose(lv_obj_t* card, int tileIdx);
+// Not tiles: a button with the touch effect; a card (Claude's prompt) with
+// the card effect from a point, closing back to it (remove takes it away).
+void fxTouchBind(lv_obj_t* b);
+void fxPromptOpen(lv_obj_t* card, lv_point_t at);
+void fxPromptClose(lv_obj_t* card, void (*remove)());
 
 // deck_ui_glass.cpp
 std::vector<uint32_t> glassKey(Page& p);

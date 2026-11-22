@@ -1,5 +1,5 @@
 """
-TouchDeck agent: the PC side of the deck's Now playing and PC control tiles.
+CompaDeck agent: the PC side of the deck's Now playing and PC control tiles.
 
   * Media    what Windows' media controls (SMTC) report: YouTube Music's PWA in
              Chrome, Spotify, a browser tab... the session that plays, else the

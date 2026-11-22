@@ -221,7 +221,7 @@
     qa(".page").forEach((p) => p.classList.toggle("active", p.dataset.page === name));
     qa(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.nav === name));
     const button = document.querySelector('.nav-item[data-nav="' + name + '"]');
-    $("crumb").textContent = button ? button.textContent.replace(/\s+/g, " ").trim() : "TouchDeck";
+    $("crumb").textContent = button ? button.textContent.replace(/\s+/g, " ").trim() : "CompaDeck";
     document.documentElement.classList.remove("nav-open");
     $("navToggle").setAttribute("aria-expanded", "false");
     updateSaveBar();
@@ -279,10 +279,14 @@
       $("warnThreshold").value === "0" ? "Off" : $("warnThreshold").value + "%";
     $("ledBrightnessVal").textContent = pct("ledBrightness");
     $("ledNightBrightnessVal").textContent = pct("ledNightBrightness");
+    $("ledSpeedVal").textContent = pct("ledSpeed");
+    $("ledIntensityVal").textContent = pct("ledIntensity");
     $("glassTintVal").textContent = $("glassTint").value + "%";
     $("glassBlurVal").textContent = $("glassBlur").value === "0" ? "Off" : $("glassBlur").value + " px";
     $("glassDimVal").textContent = $("glassDim").value + "%";
     $("glassOnVal").textContent = $("glassOn").value + "%";
+    $("askBgVal").textContent = $("askBg").value + "%";
+    $("askFrameVal").textContent = $("askFrame").value === "0" ? "Off" : $("askFrame").value + "%";
     $("sleepDimVal").textContent = $("sleepDim").value + "%";
     $("hapticStrengthVal").textContent = $("hapticStrength").value + "%";
     $("hapticMsVal").textContent = $("hapticMs").value + " ms";
@@ -295,10 +299,14 @@
     "warnThreshold",
     "ledBrightness",
     "ledNightBrightness",
+    "ledSpeed",
+    "ledIntensity",
     "glassTint",
     "glassBlur",
     "glassDim",
     "glassOn",
+    "askBg",
+    "askFrame",
     "sleepDim",
     "hapticStrength",
     "hapticMs",
@@ -309,6 +317,15 @@
     $("glassLook").classList.toggle("hidden", !g);
   }
   $("theme").addEventListener("change", updateGlassFields);
+  // Claude cards: "as the tiles" shows Tile opacity on the slider, locked.
+  function updateAskFields() {
+    const tiles = $("askBgTiles").checked;
+    $("askBg").disabled = tiles;
+    if (tiles) $("askBg").value = $("glassTint").value;
+    updateRangeLabels();
+  }
+  $("askBgTiles").addEventListener("change", updateAskFields);
+  $("glassTint").addEventListener("input", () => $("askBgTiles").checked && updateAskFields());
   // Animations: the presets as touch, on/off, page, card (as on the deck);
   // switching to Custom starts from the preset that was chosen.
   const FX_SETS = [[0, 0, 0, 0], [1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 1]];
@@ -339,9 +356,46 @@
     $("nightWakeFields").classList.toggle("hidden", !$("nightWake").checked);
   }
   $("nightWake").addEventListener("change", updateNightWakeFields);
+  /* The strip's effects (hardware/led_fx.cpp; the number is what is stored):
+   what each one uses, and the name of its sliders. deck.js reads it for a
+   page's own effect. */
+  const LED_FX = [
+    { id: 0, name: "Solid" },
+    { id: 1, name: "Breathe", speed: "Speed", inten: "Depth" },
+    { id: 7, name: "Ambient", c2: "Second color", speed: "Speed", inten: "Spread" },
+    { id: 6, name: "Glow", speed: "Speed", inten: "Depth" },
+    { id: 4, name: "Wave", speed: "Speed", inten: "Depth" },
+    { id: 5, name: "Gradient", c2: "Second color", speed: "Flow (0 = still)" },
+    { id: 2, name: "Rainbow", noC1: true, speed: "Speed", inten: "Saturation" },
+    { id: 3, name: "Rainbow cycle", noC1: true, speed: "Speed", inten: "Spread" },
+    { id: 8, name: "Twinkle", c2: "Background", speed: "Fade", inten: "Density" },
+    { id: 9, name: "Candle", speed: "Flicker speed", inten: "Flicker depth" },
+    { id: 10, name: "Fire", noC1: true, speed: "Speed", inten: "Cooling" },
+    { id: 11, name: "Scanner", c2: "Background", speed: "Speed", inten: "Tail" },
+    { id: 12, name: "Comet", c2: "Background", speed: "Speed", inten: "Tail" },
+    { id: 13, name: "Chase", c2: "Background", speed: "Speed", inten: "Gap" },
+    { id: 14, name: "Radar sweep", inten: "Trail" },
+  ];
+  window.LED_FX = LED_FX;
+  LED_FX.forEach((f) => $("ledFx").add(new Option(f.name, f.id)));
+  const ledFxInfo = (v) => LED_FX.find((f) => f.id === Number(v)) || LED_FX[0];
   function updateLedFields() {
+    const strip = $("ledType").value === "1";
+    const fx = ledFxInfo($("ledFx").value);
     $("ledFields").classList.toggle("hidden", !$("ledEnabled").checked);
+    $("ledStripFields").classList.toggle("hidden", !strip);
+    $("ledEventFields").classList.toggle("hidden", !strip);
+    $("ledColorField").classList.toggle("hidden", !!fx.noC1);
+    $("ledColor2Field").classList.toggle("hidden", !fx.c2);
+    $("ledColor2Label").textContent = fx.c2 || "Second color";
+    $("ledSpeedField").classList.toggle("hidden", !fx.speed);
+    $("ledSpeedLabel").textContent = fx.speed || "Speed";
+    $("ledIntensityField").classList.toggle("hidden", !fx.inten);
+    $("ledIntensityLabel").textContent = fx.inten || "Intensity";
     $("ledNightFields").classList.toggle("hidden", !$("ledNightEnabled").checked);
+    $("ledWiring").textContent = strip
+      ? "Strip: 5V and GND to the board's 5 V, DIN straight to the GPIO (start of the arrow), a capacitor of a few hundred µF across 5V and GND. A pin already used by the display, touch, USB or flash is refused."
+      : "Drive the LED through a transistor, not straight off the GPIO. A pin already used by the display, touch, USB or flash is refused.";
   }
   /* Live LED preview: the slider drives the real LED while the page is open, so
    a brightness is chosen by looking at the LED rather than by saving and
@@ -353,6 +407,14 @@
     if ($("ledEnabled").checked) fd.append("ledEnabled", "1");
     fd.append("ledPin", $("ledPin").value);
     fd.append("ledBrightness", $("ledBrightness").value);
+    fd.append("ledType", $("ledType").value);
+    fd.append("ledCount", $("ledCount").value);
+    fd.append("ledColor", $("ledColor").value);
+    fd.append("ledFx", $("ledFx").value);
+    fd.append("ledSpeed", $("ledSpeed").value);
+    fd.append("ledIntensity", $("ledIntensity").value);
+    fd.append("ledColor2", $("ledColor2").value);
+    if ($("ledReverse").checked) fd.append("ledReverse", "1");
     ledPreviewOn = true;
     fetch("/led/preview", { method: "POST", body: fd }).catch(() => {});
   }
@@ -387,7 +449,31 @@
       showToast(e.message, true);
     }
   });
-  ["ledBrightness", "ledPin"].forEach((id) => $(id).addEventListener("input", queueLedPreview));
+  ["ledBrightness", "ledPin", "ledCount", "ledColor", "ledColor2", "ledSpeed", "ledIntensity"].forEach((id) =>
+    $(id).addEventListener("input", queueLedPreview),
+  );
+  $("ledReverse").addEventListener("change", queueLedPreview);
+  $("ledFx").addEventListener("change", () => {
+    updateLedFields();
+    queueLedPreview();
+  });
+  document.querySelectorAll("[data-led-test]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      try {
+        const d = await getJson("/led/test", {
+          method: "POST",
+          body: new URLSearchParams({ event: b.dataset.ledTest }),
+        });
+        showToast(d.message || "Testing", false);
+      } catch (e) {
+        showToast(e.message, true);
+      }
+    }),
+  );
+  $("ledType").addEventListener("change", () => {
+    updateLedFields();
+    queueLedPreview();
+  });
 
   // Speaker (Hardware page): sound pickers, Test buttons, WAV files.
   const AUDIO_PICKS = ["audioFileFinished", "audioFileError", "audioFileCooled"];
@@ -575,6 +661,14 @@
     setVal("glassDim", c.display.glassDim);
     setVal("glassOn", c.display.glassOn || 80);
     setCheck("glassAutoText", c.display.glassAutoText === true);
+    {
+      const bg = c.display.askBg ?? 255;  // 255: as the tiles
+      setCheck("askBgTiles", bg === 255);
+      setVal("askBg", bg === 255 ? c.display.glassTint : bg);
+      setVal("askFrame", c.display.askFrame ?? 20);
+      setVal("askFrameColor", c.display.askFrameColor || "#ffffff");
+      updateAskFields();
+    }
     updateGlassFields();
     updateFxFields();
     setCheck("smoothCharts", c.display.smoothCharts !== false);
@@ -606,6 +700,20 @@
     setVal("ledNightEnd", l.nightEnd || "07:00");
     setCheck("ledFollowDisplay", l.followDisplay);
     setCheck("ledOfflineOff", l.offlineOff);
+    setCheck("ledBatteryOff", l.batteryOff);
+    setVal("ledType", l.type == null ? 0 : l.type);
+    setVal("ledCount", l.count || 6);
+    if (l.maxCount) $("ledCount").max = l.maxCount;
+    setVal("ledColor", (l.color || "#ffffff").toLowerCase());
+    setVal("ledFx", l.fx == null ? 0 : l.fx);
+    setVal("ledSpeed", l.speed == null ? 128 : l.speed);
+    setVal("ledIntensity", l.intensity == null ? 128 : l.intensity);
+    setVal("ledColor2", (l.color2 || "#0040ff").toLowerCase());
+    setCheck("ledReverse", l.reverse);
+    setCheck("ledEvProgress", l.evProgress);
+    setCheck("ledEvDone", l.evDone);
+    setCheck("ledEvError", l.evError);
+    setCheck("ledEvClaude", l.evClaude);
     $("ledAllowedPins").textContent = (l.allowedPins || []).join(", ") || "none";
     const hp = c.haptic || {};
     setCheck("hapticEnabled", hp.enabled);
@@ -661,6 +769,7 @@
     setVal("lon", cp.lon || "");
     setVal("radarKm", cp.radarKm || 25);
     setVal("radarGnd", cp.radarGnd || 0);
+    setCheck("radarLed", cp.radarLed !== false);
     setVal("timeFormat", c.clock.use24h ? "24" : "12");
     setVal("timezone", c.clock.timezone || "");
     const tz = qa("#timezonePreset option").find((o) => o.value === (c.clock.timezone || ""));
@@ -668,7 +777,7 @@
     setVal("wifiSsid", c.network.ssid || "");
     showSaved(c.network.saved || []);
     setVal("wifiPass", "");
-    setVal("hostname", c.network.hostname || "touchdeck");
+    setVal("hostname", c.network.hostname || "compadeck");
     setCheck("mdns", c.network.mdns);
     setCheck("showIp", c.network.showIp);
     setVal("ipMode", c.network.dhcp ? "dhcp" : "static");
@@ -784,7 +893,7 @@
       $("srLed").classList.remove("offline");
       $("srTitle").textContent = s.ap_mode ? "setup access point" : "device online";
       $("srIp").textContent = s.ip || "--";
-      $("srHost").textContent = (s.hostname || "touchdeck") + ".local";
+      $("srHost").textContent = (s.hostname || "compadeck") + ".local";
       $("srPc").textContent = s.pc_online ? "online" : "offline";
       $("srMetrics").textContent = s.metric_count;
       $("pcStateTag").textContent = s.pc_online ? "online" : "offline";
@@ -819,7 +928,12 @@
           ? "disabled"
           : !s.led_pin_valid
             ? "invalid pin"
-            : Number(s.led_duty) === 0
+            : s.led_battery
+              ? "off on battery"
+              : s.led_event
+                ? { claude: "Claude waiting", done: "print done", error: "printer error" }[s.led_event] ||
+                  "print progress"
+                : Number(s.led_duty) === 0
               ? "off"
               : (s.led_night ? "night " : "") + Math.round((Number(s.led_duty) * 100) / 255) + "%";
     } catch (e) {
@@ -911,7 +1025,7 @@
   function exportConfiguration() {
     const a = document.createElement("a");
     a.href = "/api/config/export?t=" + Date.now();
-    a.download = "touchdeck-config-" + new Date().toISOString().slice(0, 10) + ".json";
+    a.download = "compadeck-config-" + new Date().toISOString().slice(0, 10) + ".json";
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -933,7 +1047,7 @@
         throw new Error("The selected file is not valid JSON");
       }
       if (!parsed || parsed.format !== "touchdeck-config")
-        throw new Error("This is not a TouchDeck configuration backup");
+        throw new Error("This is not a CompaDeck configuration backup");
       if (!confirm("Restore this configuration and restart the device? WiFi credentials will be preserved."))
         return;
       $("backupImport").disabled = true;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare wallpapers for TouchDeck on a PC.
+"""Prepare wallpapers for CompaDeck on a PC.
 
 Pictures are centre-cropped to 480x320 (landscape) and/or 320x480 (portrait)
 and saved as baseline JPEG with 8-hex names, the format the deck expects.

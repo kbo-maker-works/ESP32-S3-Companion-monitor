@@ -1,4 +1,4 @@
-# TouchDeck PC agent
+# CompaDeck PC agent
 
 `touchdeck_agent.py` feeds the deck from this PC over WiFi (UDP port 4210):
 
@@ -105,7 +105,7 @@ Minimized.
 
 Claude Code runs the same script as `touchdeck_agent.py hook` on its hook
 events; each call writes a small state file under `~/.claude/touchdeck/` and
-exits at once. In `~/.claude/settings.json`, one entry per event
+exits at once (all but `PermissionRequest`, below). In `~/.claude/settings.json`, one entry per event
 (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
 `Notification`, `Stop`, `SessionEnd`), all with the same command:
 
@@ -115,6 +115,65 @@ exits at once. In `~/.claude/settings.json`, one entry per event
 ```
 
 `pythonw.exe` keeps a console window from flashing on every hook.
+
+### Permission prompts and questions on the deck (td_ask.py)
+
+With one more entry, `PermissionRequest`, Claude Code's permission prompts
+(Allow / Always / Deny) and its questions (AskUserQuestion, one at a time,
+several options when it takes more than one) show up as a card on the deck. The
+terminal shows its own dialog meanwhile, and whichever answers first wins. A
+deny from the deck stops Claude, like the terminal's No.
+
+The hook waits for the deck's answer, so it can't be `async` and it needs a long
+timeout (the prompt stays on the deck for up to an hour):
+
+```json
+"PermissionRequest": [
+  { "hooks": [
+    { "type": "command",
+      "command": "C:/git-proyects/desktop-companion/pc-agent/.venv/Scripts/pythonw.exe C:/git-proyects/desktop-companion/pc-agent/touchdeck_agent.py hook",
+      "timeout": 3600 } ] } ]
+```
+
+It only waits while the agent runs and this PC is paired (`touchdeck_agent.py
+pair`), since the deck answers with a signed command. Otherwise it steps aside
+at once and only the terminal asks. When the terminal answers first, the hook
+sees the tool's result in the transcript, or the session move on, and exits
+without a decision. A prompt waiting for a tool to finish (one you allowed in the
+terminal) can stay on the deck until the tool ends; a tap on it then does
+nothing. The x on the card hides it until the next prompt.
+
+## Bench app: sheets for the workbench (td_bench.py)
+
+The soldering order, which wire goes where, a pinout: send it to the deck and
+read it at the soldering station instead of on the phone or the PC. The deck
+opens the Bench app by itself, and keeps the screen on while it is open.
+
+```
+python td_bench.py steps.txt           # text: one step per line
+python td_bench.py pinout.png          # a picture
+python td_bench.py --clip              # whatever is copied: a picture or text
+python td_bench.py --text "Red -> 5V"  # text from the command line
+some_command | python td_bench.py -    # text from stdin
+python td_bench.py --sendto            # Windows: "CompaDeck Bench" in Explorer's Send to menu
+```
+
+- **Text**: one step per line. `# Title` lines are section headings, list
+  markers (`- `, `1. `, `[ ] `) are dropped, colour words (red, black, rojo,
+  negro...) get a swatch and `->` becomes an arrow. A Markdown table becomes
+  one step per row (`Red -> 3V3`) under its header row. On the deck: tap the
+  right half for the next step, the left half to go back. The current step
+  survives a reboot.
+- **Picture**: resized to at most 800 x 600 and sent as a JPEG (Pillow; a
+  `.jpg` goes as it is without it). On the deck: tap to zoom 1:1 at that
+  point, drag to pan, tap again to fit.
+- The title is the file name, `--title`, or the text's first heading.
+
+Like the Work app's data, the deck takes a sheet only from a PC whose agent
+(`touchdeck_agent.py`) is running: same PC id, same address. Endpoints:
+`POST /api/pc/bench` `{"pc_id", "title", "text"}` (up to 8 KB),
+`POST /api/pc/bench/image?pc_id=&title=` (multipart `image`, a baseline JPEG up
+to 400 KB) and `GET /api/pc/bench` (the current sheet).
 
 ## Work app: GitLab and Jira (td_work.py)
 

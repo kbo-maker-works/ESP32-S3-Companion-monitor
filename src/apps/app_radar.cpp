@@ -33,7 +33,7 @@ constexpr int PW = 480 - PX - 8;
 constexpr int ROWS = 5, ROW_H = 26, LIST_Y = 44;
 constexpr int DET_Y = LIST_Y + ROWS * ROW_H + 10;
 constexpr uint32_t FRAME_MS = 40;            // ~25 fps
-constexpr uint32_t SWEEP_MS = 4000;          // one turn
+constexpr uint32_t SWEEP_MS = LED_RADAR_SWEEP_MS;  // one turn (4 s), in step with the LED strip and the widget
 constexpr int ANG = 1024;                    // angle units per turn
 constexpr int TRAIL = ANG * 70 / 360;        // 70° trail
 constexpr uint16_t OUT = 0xFFFF;             // outside the disc in the LUT

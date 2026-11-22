@@ -11,6 +11,7 @@ DisplaySettings dispSettings;
 NetworkSettings netSettings;
 BacklightSettings backlightSettings;
 LedSettings ledSettings;
+LedFxSettings ledFxSettings;
 AdvancedSettings advSettings = {};
 PresenceSettings presenceSettings;
 HapticSettings hapticSettings;
@@ -23,7 +24,8 @@ bool validFrameEvery(int minutes) {
 
 static Preferences prefs;
 static const uint8_t BACKLIGHT_SETTINGS_VERSION = 1;
-static const uint8_t LED_SETTINGS_VERSION = 2;
+static const uint8_t LED_SETTINGS_VERSION = 3;
+static const uint8_t LED_FX_SETTINGS_VERSION = 1;
 
 // ---------------------------------------------------------------------------
 //  StatNode migration
@@ -108,6 +110,9 @@ void defaultDisplaySettings(DisplaySettings& ds) {
   ds.dailyOrient      = 0;
   ds.dailyCount       = 12;
   ds.glassAutoText    = false;
+  ds.askBg            = ASK_BG_TILES;
+  ds.askFrame         = 20;
+  ds.askFrameColor    = 0xFFFFFF;
   ds.smoothCharts     = true;
   ds.batteryPct       = true;
   ds.printerFx        = true;
@@ -134,6 +139,21 @@ void defaultLedSettings(LedSettings& ls) {
   ls.offlineOff = 0;
   ls.nightStartMinute = 22 * 60;
   ls.nightEndMinute = 7 * 60;
+  ls.type = LED_TYPE_STRIP;
+  ls.count = LED_STRIP_DEFAULT_COUNT;
+  ls.batteryOff = 1;
+  ls.reserved = 0;
+  ls.color = LED_STRIP_DEFAULT_COLOR;
+}
+
+void defaultLedFxSettings(LedFxSettings& fx) {
+  memset(&fx, 0, sizeof(fx));
+  fx.version = LED_FX_SETTINGS_VERSION;
+  fx.effect = LED_FX_SOLID;
+  fx.speed = 128;
+  fx.intensity = 128;
+  fx.color2 = 0x0040FF;
+  fx.events = LED_EVB_PROGRESS | LED_EVB_DONE | LED_EVB_ERROR | LED_EVB_CLAUDE;
 }
 
 void defaultNetworkSettings(NetworkSettings& ns) {
@@ -142,7 +162,7 @@ void defaultNetworkSettings(NetworkSettings& ns) {
   ns.showIPAtStartup = true;
   ns.use24h = true;
   ns.mdnsEnabled = true;
-  sanitizeHostname("touchdeck", ns.hostname, sizeof(ns.hostname));
+  sanitizeHostname("compadeck", ns.hostname, sizeof(ns.hostname));
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +175,7 @@ void loadSettings() {
   defaultNetworkSettings(netSettings);
   defaultBacklightSettings(backlightSettings);
   defaultLedSettings(ledSettings);
+  defaultLedFxSettings(ledFxSettings);
 
   prefs.begin(NVS_NAMESPACE, false);
   if (!prefs.isKey("rot")) {
@@ -184,6 +205,10 @@ void loadSettings() {
   dispSettings.dailyOrient = min<uint8_t>(prefs.getUChar("dorient", 0), 2);
   dispSettings.dailyCount = constrain(prefs.getUChar("dcount", 12), 1, DAILY_MAX_COUNT);
   dispSettings.glassAutoText = prefs.getBool("gauto", false);
+  dispSettings.askBg = prefs.getUChar("askbg", ASK_BG_TILES);
+  if (dispSettings.askBg > 90 && dispSettings.askBg != ASK_BG_TILES) dispSettings.askBg = ASK_BG_TILES;
+  dispSettings.askFrame = min<uint8_t>(prefs.getUChar("askfrm", 20), 100);
+  dispSettings.askFrameColor = prefs.getUInt("askfc", 0xFFFFFF) & 0xFFFFFF;
   dispSettings.smoothCharts = prefs.getBool("smooth", true);
   dispSettings.batteryPct = prefs.getBool("batpct", true);
   dispSettings.printerFx = prefs.getBool("prnfx", true);
@@ -211,17 +236,31 @@ void loadSettings() {
     LedSettings stored;
     prefs.getBytes("led", &stored, sizeof(stored));
     if (stored.version == LED_SETTINGS_VERSION) ledSettings = stored;
-  } else if (ledLen == offsetof(LedSettings, nightStartMinute)) {
-    // v1 dimmed only inside the backlight's schedule: take its times and switch.
+  } else if (ledLen == offsetof(LedSettings, type) ||
+             ledLen == offsetof(LedSettings, nightStartMinute)) {
+    // An older blob over the defaults. Neither v1 nor v2 knew a strip: what
+    // was on the pin was a PWM LED. v1 also dimmed only inside the backlight's
+    // schedule: take its times and switch.
     LedSettings stored = ledSettings;
     prefs.getBytes("led", &stored, ledLen);
-    if (stored.version == 1) {
-      stored.version = LED_SETTINGS_VERSION;
+    const bool v1 = ledLen == offsetof(LedSettings, nightStartMinute) && stored.version == 1;
+    const bool v2 = ledLen == offsetof(LedSettings, type) && stored.version == 2;
+    if (v1) {
       stored.nightStartMinute = backlightSettings.nightStartMinute;
       stored.nightEndMinute = backlightSettings.nightEndMinute;
       if (!backlightSettings.nightEnabled) stored.nightEnabled = 0;
+    }
+    if (v1 || v2) {
+      stored.version = LED_SETTINGS_VERSION;
+      stored.type = LED_TYPE_PWM;
+      stored.batteryOff = 0;
       ledSettings = stored;
     }
+  }
+  if (prefs.getBytesLength("ledfx") == sizeof(LedFxSettings)) {
+    LedFxSettings stored;
+    prefs.getBytes("ledfx", &stored, sizeof(stored));
+    if (stored.version == LED_FX_SETTINGS_VERSION) ledFxSettings = stored;
   }
   prefs.getString("ssid", wifiSSID, sizeof(wifiSSID));
   prefs.getString("pass", wifiPass, sizeof(wifiPass));
@@ -289,6 +328,9 @@ void saveSettings() {
   prefs.putUChar("dorient", dispSettings.dailyOrient);
   prefs.putUChar("dcount", dispSettings.dailyCount);
   prefs.putBool("gauto", dispSettings.glassAutoText);
+  prefs.putUChar("askbg", dispSettings.askBg);
+  prefs.putUChar("askfrm", dispSettings.askFrame);
+  prefs.putUInt("askfc", dispSettings.askFrameColor);
   prefs.putBool("smooth", dispSettings.smoothCharts);
   prefs.putBool("batpct", dispSettings.batteryPct);
   prefs.putBool("prnfx", dispSettings.printerFx);
@@ -307,6 +349,7 @@ void saveSettings() {
   prefs.putBytes("net", &netSettings, sizeof(NetworkSettings));
   prefs.putBytes("backlight", &backlightSettings, sizeof(BacklightSettings));
   prefs.putBytes("led", &ledSettings, sizeof(LedSettings));
+  prefs.putBytes("ledfx", &ledFxSettings, sizeof(LedFxSettings));
   prefs.putString("ssid", wifiSSID);
   prefs.putString("pass", wifiPass);
   prefs.putUChar("bright", brightness);
@@ -373,5 +416,5 @@ void sanitizeHostname(const char* in, char* out, size_t outSize) {
   }
   while (j > 0 && out[j - 1] == '-') j--;
   out[j] = '\0';
-  if (j == 0) strlcpy(out, "touchdeck", outSize);
+  if (j == 0) strlcpy(out, "compadeck", outSize);
 }
