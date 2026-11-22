@@ -328,6 +328,18 @@ lv_obj_t* qpButton(lv_obj_t* parent, int x, int y, int w, const char* text, bool
 const uint16_t* lastFrame();
 lv_draw_buf_t* frostedCopy(int x, int y, int w, int h, int rad, int tintPct = -1);
 void frostStyle(lv_obj_t* o, lv_draw_buf_t* glass);
+// The same frost in horizontal bands, opaque with square corners: a screen
+// sized one (apps, Claude's cards) then needs no single block of PSRAM as big
+// as the screen, which a fragmented PSRAM no longer has.
+constexpr int FROST_BANDS = 4;
+struct FrostBands {
+  lv_draw_buf_t* buf[FROST_BANDS] = {};
+  explicit operator bool() const { return buf[0] != nullptr; }
+};
+bool frostedBands(FrostBands& out, int x, int y, int w, int h, int tintPct = -1);
+// o shows them under its children; b must outlive o.
+void frostBandsStyle(lv_obj_t* o, const FrostBands* b);
+void frostBandsFree(FrostBands& b);
 void buildQuickPanel();
 void destroyQuickPanel();
 void showPanel(bool open);

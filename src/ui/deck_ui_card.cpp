@@ -11,6 +11,7 @@ lv_obj_t* s_toast = nullptr;
 lv_obj_t* s_modalScrim = nullptr;
 lv_obj_t* s_modalCard = nullptr;
 lv_draw_buf_t* s_modalGlass = nullptr;  // Glass theme: the card's frosted background
+FrostBands s_appGlass;                  // the same for an app, screen sized
 int s_modalTile = -1;
 lv_obj_t* s_modalState = nullptr;
 lv_obj_t* s_modalIcon = nullptr;
@@ -243,7 +244,7 @@ void openApp(int tileIdx, const String& id) {
   lv_obj_set_pos(c, 0, 0);
   lv_obj_set_style_bg_color(c, lv_color_hex(C_BG), 0);
   lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
-  if (s_theme == THEME_GLASS && (s_modalGlass = frostedCopy(0, 0, w, h, 0))) frostStyle(c, s_modalGlass);
+  if (s_theme == THEME_GLASS && frostedBands(s_appGlass, 0, 0, w, h)) frostBandsStyle(c, &s_appGlass);
   lv_obj_set_style_text_color(c, lv_color_hex(C_TEXT), 0);
   lv_obj_add_flag(c, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_remove_flag(c, LV_OBJ_FLAG_SCROLLABLE);
@@ -298,6 +299,7 @@ void closeModal() {
   s_modalCard = s_modalScrim = s_modalUnder = nullptr;
   if (s_modalGlass) lv_draw_buf_destroy(s_modalGlass);
   s_modalGlass = nullptr;
+  frostBandsFree(s_appGlass);
   s_modalIcon = nullptr;
   s_modalTile = -1;
   s_confirmHold = -1;
@@ -745,7 +747,7 @@ constexpr uint32_t C_CLAUDE = 0xD97757;  // Claude's orange
 // the text on it; its light variant on Daylight.
 uint32_t askAccent() { return s_theme == THEME_DAYLIGHT ? 0x1F8A5B : 0x36B478; }
 uint32_t askOnAccent() { return s_theme == THEME_DAYLIGHT ? 0xFFFFFF : 0x0C1A12; }
-lv_draw_buf_t* s_askGlass = nullptr;  // Glass theme: the card's frosted background
+FrostBands s_askGlass;  // Glass theme: the card's frosted background
 
 // keepGlass: another prompt replaces this one at once, over the same screen;
 // a fresh copy now would frost this card instead of the page under it.
@@ -753,10 +755,7 @@ void askClose(bool keepGlass = false) {
   if (s_askCard) lv_obj_delete(s_askCard);
   if (s_askScrim) lv_obj_delete(s_askScrim);
   s_askCard = s_askScrim = nullptr;
-  if (!keepGlass && s_askGlass) {
-    lv_draw_buf_destroy(s_askGlass);
-    s_askGlass = nullptr;
-  }
+  if (!keepGlass) frostBandsFree(s_askGlass);
   memset(s_askBtn, 0, sizeof(s_askBtn));
   memset(s_askBadge, 0, sizeof(s_askBadge));
   s_askDot = nullptr;
@@ -868,7 +867,7 @@ lv_opa_t askButtonOpa() { return (lv_opa_t)(std::max<int>(dispSettings.glassTint
 // A button's colours. Glass: as the theme's tiles, tinted glass with a light
 // edge, and the accent (picked, or the main one) at the "on" opacity.
 void askFace(lv_obj_t* b, bool main) {
-  const bool glass = s_askGlass != nullptr;
+  const bool glass = (bool)s_askGlass;
   lv_obj_set_style_bg_color(b, lv_color_hex(main ? askAccent() : glass ? C_TILE : C_BUTTON), 0);
   lv_obj_set_style_bg_color(b, lv_color_hex(askAccent()), LV_STATE_CHECKED);
   lv_obj_set_style_text_color(b, lv_color_hex(main ? askOnAccent() : C_TEXT), 0);
@@ -998,8 +997,8 @@ lv_obj_t* askRoot(int w, int h) {
   lv_obj_set_style_bg_color(c, lv_color_hex(C_PANEL), 0);
   lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
   const int bg = dispSettings.askBg == ASK_BG_TILES ? dispSettings.glassTint : dispSettings.askBg;
-  if (s_theme == THEME_GLASS && (s_askGlass || (s_askGlass = frostedCopy(0, 0, w, h, 0, bg)))) {
-    frostStyle(c, s_askGlass);
+  if (s_theme == THEME_GLASS && (s_askGlass || frostedBands(s_askGlass, 0, 0, w, h, bg))) {
+    frostBandsStyle(c, &s_askGlass);
     askFrameStyle(c);
   }
   lv_obj_set_style_text_color(c, lv_color_hex(C_TEXT), 0);

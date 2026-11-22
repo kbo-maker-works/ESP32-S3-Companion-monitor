@@ -198,7 +198,10 @@ struct Frost {
   int tint;  // % of C_PANEL over the blur
   uint8_t* plane[3];
   uint8_t* scratch[3];  // per blur plane, then per half of the upscale
-  lv_draw_buf_t* out;
+  // bandH rows in each; one RGB565A8 buffer (alpha) or RGB565 bands.
+  lv_draw_buf_t* out[FROST_BANDS];
+  int bandH;
+  bool alpha;
 };
 
 // Half resolution: cheaper, and the same blur radius reaches twice as far.
@@ -230,8 +233,9 @@ void frostUp(void* ctx, int lo, int hi) {
   // Tint and blur in 1/1600: the bilinear sum is in 16ths.
   const int tint[3] = {(int)(C_PANEL >> 16 & 0xFF) * tp * 16, (int)(C_PANEL >> 8 & 0xFF) * tp * 16,
                        (int)(C_PANEL & 0xFF) * tp * 16};
-  const uint32_t stride = f.out->header.stride;
-  uint8_t* alpha = f.out->data + stride * h;  // RGB565A8: the A8 plane follows, half the stride
+  // RGB565A8: the A8 plane follows, half the stride.
+  const lv_draw_buf_t* first = f.out[0];
+  uint8_t* alpha = f.alpha ? first->data + first->header.stride * h : nullptr;
   // Bilinear between the half-resolution samples (centres at 2i + 0.5), in
   // quarters. A plane row interpolated across serves four output rows.
   uint16_t* scratch = (uint16_t*)f.scratch[lo ? 1 : 0];
@@ -248,8 +252,8 @@ void frostUp(void* ctx, int lo, int hi) {
     }
   };
   for (int yy = lo; yy < hi; yy++) {
-    uint16_t* row = (uint16_t*)(f.out->data + yy * stride);
-    uint8_t* arow = alpha + yy * (stride / 2);
+    const lv_draw_buf_t* band = f.out[yy / f.bandH];
+    uint16_t* row = (uint16_t*)(band->data + (yy % f.bandH) * band->header.stride);
     const int fy = constrain(2 * yy - 1, 0, 4 * (hh - 1));
     const int j0 = fy >> 2, j1 = std::min(j0 + 1, hh - 1), wy = fy & 3;
     if (rowOf[0] != j0 && rowOf[1] == j0) {
@@ -266,6 +270,8 @@ void frostUp(void* ctx, int lo, int hi) {
         c[k] = ((a0[k * w + xx] * (4 - wy) + a1[k * w + xx] * wy) * (100 - tp) + tint[k]) / 1600;
       row[xx] = wallDither565(c[0], c[1], c[2], f.x + xx, f.y + yy);
     }
+    if (!alpha) continue;
+    uint8_t* arow = alpha + yy * (first->header.stride / 2);
     memset(arow, 255, w);
     const float cy = std::max(0.0f, std::max((float)rad - ((float)yy + 0.5f), (float)yy + 0.5f - (float)(h - rad)));
     if (cy <= 0) continue;
@@ -283,25 +289,96 @@ void frostUp(void* ctx, int lo, int hi) {
 // radius rad cut by alpha (a background image ignores the radius). Pixels off
 // the screen repeat its edge. tintPct: how much C_PANEL covers the blur, -1 =
 // FROST_TINT. RGB565A8; nullptr when PSRAM is short.
-lv_draw_buf_t* frostedCopy(int x, int y, int w, int h, int rad, int tintPct) {
+Frost frostAt(int x, int y, int w, int h, int rad, int tintPct) {
   Frost f = {lastFrame(), logicalW(), logicalH(), x, y, w, h, rad, (w + 1) / 2, (h + 1) / 2};
   f.tint = tintPct < 0 ? FROST_TINT : std::min(tintPct, 100);
-  const size_t hn = (size_t)f.hw * f.hh, sn = std::max(hn, (size_t)w * 12);
-  uint8_t* pl = (uint8_t*)heap_caps_malloc(hn * 3 + sn * 3, MALLOC_CAP_SPIRAM);
-  f.out = pl ? lv_draw_buf_create(w, h, LV_COLOR_FORMAT_RGB565A8, 0) : nullptr;
-  if (!f.out) {
-    heap_caps_free(pl);
-    return nullptr;
-  }
+  return f;
+}
+
+// The blur planes and their scratch, each in its own block: six small ones
+// (38 KB for the whole screen) where one would need 230 KB in a row.
+bool frostPlanes(Frost& f) {
+  const size_t hn = (size_t)f.hw * f.hh, sn = std::max(hn, (size_t)f.w * 12);
   for (int k = 0; k < 3; k++) {
-    f.plane[k] = pl + k * hn;
-    f.scratch[k] = pl + 3 * hn + k * sn;
+    f.plane[k] = (uint8_t*)heap_caps_malloc(hn, MALLOC_CAP_SPIRAM);
+    f.scratch[k] = (uint8_t*)heap_caps_malloc(sn, MALLOC_CAP_SPIRAM);
+    if (!f.plane[k] || !f.scratch[k]) return false;
   }
+  return true;
+}
+
+void frostPlanesFree(Frost& f) {
+  for (int k = 0; k < 3; k++) {
+    heap_caps_free(f.plane[k]);
+    heap_caps_free(f.scratch[k]);
+    f.plane[k] = f.scratch[k] = nullptr;
+  }
+}
+
+void frostRun(Frost& f) {
   panelShare(frostDown, &f, f.hh, 16);
   panelShare(frostBlur, &f, 3, 1);
-  panelShare(frostUp, &f, h, (h + 1) / 2);
-  heap_caps_free(pl);
-  return f.out;
+  panelShare(frostUp, &f, f.h, (f.h + 1) / 2);
+}
+
+lv_draw_buf_t* frostedCopy(int x, int y, int w, int h, int rad, int tintPct) {
+  Frost f = frostAt(x, y, w, h, rad, tintPct);
+  f.bandH = h;
+  f.alpha = true;
+  if (frostPlanes(f)) f.out[0] = lv_draw_buf_create(w, h, LV_COLOR_FORMAT_RGB565A8, 0);
+  if (f.out[0]) frostRun(f);
+  frostPlanesFree(f);
+  return f.out[0];
+}
+
+bool frostedBands(FrostBands& b, int x, int y, int w, int h, int tintPct) {
+  frostBandsFree(b);
+  Frost f = frostAt(x, y, w, h, 0, tintPct);
+  f.bandH = (h + FROST_BANDS - 1) / FROST_BANDS;
+  bool ok = frostPlanes(f);
+  for (int k = 0, top = 0; ok && top < h; k++, top += f.bandH)
+    ok = (f.out[k] = lv_draw_buf_create(w, std::min(f.bandH, h - top), LV_COLOR_FORMAT_RGB565, 0)) != nullptr;
+  if (ok) frostRun(f);
+  frostPlanesFree(f);
+  for (int k = 0; k < FROST_BANDS; k++) {
+    if (ok) b.buf[k] = f.out[k];
+    else if (f.out[k]) lv_draw_buf_destroy(f.out[k]);
+  }
+  if (!ok) Serial.printf("Deck: frost %dx%d: PSRAM short (largest %u)\n", w, h,
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+  return ok;
+}
+
+// Before the object's own background and border: the border stays on top.
+void frostBandsDraw(lv_event_t* e) {
+  const FrostBands& b = *(const FrostBands*)lv_event_get_user_data(e);
+  lv_area_t a;
+  lv_obj_get_coords(lv_event_get_current_target_obj(e), &a);
+  lv_draw_image_dsc_t d;
+  lv_draw_image_dsc_init(&d);
+  for (int k = 0; k < FROST_BANDS && b.buf[k]; k++) {
+    d.src = b.buf[k];
+    lv_area_t r = {a.x1, a.y1, (int32_t)(a.x1 + b.buf[k]->header.w - 1), (int32_t)(a.y1 + b.buf[k]->header.h - 1)};
+    lv_draw_image(lv_event_get_layer(e), &d, &r);
+    a.y1 = r.y2 + 1;
+  }
+}
+
+void frostBandsStyle(lv_obj_t* o, const FrostBands* b) {
+  lv_obj_set_style_bg_opa(o, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(o, 1, 0);
+  lv_obj_set_style_border_color(o, lv_color_white(), 0);
+  lv_obj_set_style_border_opa(o, LV_OPA_30, 0);
+  lv_obj_add_event_cb(o, frostBandsDraw, LV_EVENT_DRAW_MAIN_BEGIN, (void*)b);
+}
+
+void frostBandsFree(FrostBands& b) {
+  for (lv_draw_buf_t*& buf : b.buf) {
+    if (!buf) continue;
+    lv_image_cache_drop(buf);
+    lv_draw_buf_destroy(buf);
+    buf = nullptr;
+  }
 }
 
 void frostStyle(lv_obj_t* o, lv_draw_buf_t* glass) {
