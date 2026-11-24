@@ -30,8 +30,10 @@ touchdeck_agent.py starts it when ~/.touchdeck/work.json exists.
     ],                                         # is a section on the deck with its count and tickets
     "every_s": 120
   },
-  "confluence": {"enabled": true}              # only checked for now (Test on the settings page)
-}
+  "confluence": {"enabled": true},             # only checked for now (Test on the settings page)
+  "branches": {"enabled": true}                # local branches: ~/.claude/briefing/branches.py when it
+}                                              # exists ("script" for another path); scanned only when
+                                               # the deck asks (Branches tab), never on a timer
 
 Test your tokens without the deck:   python td_work.py --once
 Show sample data on the deck:        python td_work.py --sample --host 192.168.1.225
@@ -441,6 +443,76 @@ class Jira:
 
 
 # ---------------------------------------------------------------------------
+# Local branches: branches.py, on demand
+# ---------------------------------------------------------------------------
+BRANCHES_SCRIPT = os.path.join(os.path.expanduser("~"), ".claude", "briefing", "branches.py")
+BRANCHES_TIMEOUT_S = 180
+MAX_BRANCHES = 16
+# Deck field sizes (WorkBranch in src/services/work_data.h).
+MAX_BR_REPO, MAX_BR_NAME, MAX_BR_STATE, MAX_BR_TICKET, MAX_BR_MR, MAX_BR_REASON, MAX_BR_AGE = 23, 47, 11, 15, 27, 63, 5
+VERDICTS = ("keep", "review", "delete")
+STATE_TONE = {"active": "o", "parked": "w", "blocked": "b", "stale": "w", "merged": "d", "review": "i", "keep": "o"}
+
+
+def days_short(days):
+    days = int(days or 0)
+    if days < 1:
+        return "today"
+    if days < 60:
+        return "%dd" % days
+    return "%dmo" % (days // 30)
+
+
+class Branches:
+    """The local branches of the repos under ~/code, as branches.py classifies
+    them (keep / review / delete). Never on a timer: a scan runs git in every
+    repo and asks GitLab for the MRs (~15 s), so it runs only when the deck asks
+    (its Branches tab, the refresh button): the "branches_scan" command."""
+
+    every = float("inf")
+
+    def __init__(self, cfg):
+        self.script = os.path.expanduser(cfg.get("script") or BRANCHES_SCRIPT)
+
+    def poll(self):
+        # The service's PATH is the bare system one: glab lives in Homebrew.
+        env = dict(os.environ)
+        extra = [p for p in ("/opt/homebrew/bin", "/usr/local/bin") if os.path.isdir(p)]
+        env["PATH"] = os.pathsep.join(extra + [env.get("PATH") or "/usr/bin:/bin"])
+        out = subprocess.run([sys.executable, self.script, "scan"], capture_output=True, text=True,
+                             timeout=BRANCHES_TIMEOUT_S, env=env, stdin=subprocess.DEVNULL)
+        if out.returncode != 0:
+            raise RuntimeError((out.stderr.strip().splitlines() or ["branches.py failed"])[-1])
+        scan = json.loads(out.stdout)
+        links, rows = {}, []
+        summary = scan.get("summary") or {}
+        for b in scan.get("branches") or []:
+            if len(rows) >= MAX_BRANCHES:
+                break
+            mr = b.get("mr") or {}
+            ref = (mr.get("ref") or "").rsplit("/", 1)[-1]  # "tps/core-services!60" -> "core-services!60"
+            # [verdict, state, tone, repo, branch, ticket, mr, reason, age, checked out, link]
+            rows.append([b.get("verdict", "keep")[0], clip(b.get("state"), MAX_BR_STATE),
+                         STATE_TONE.get(b.get("state"), "d"), clip(b.get("repo"), MAX_BR_REPO),
+                         clip(b.get("branch"), MAX_BR_NAME), clip(b.get("ticket") or "", MAX_BR_TICKET),
+                         clip(ref, MAX_BR_MR), clip(re.sub(r"[\w.-]+/(?=[\w.-]+!\d)", "", b.get("reason") or ""), MAX_BR_REASON),
+                         clip(days_short(b.get("ageDays")), MAX_BR_AGE), 1 if b.get("checkedOut") else 0,
+                         link(links, mr.get("url"))])
+        gl = scan.get("gitlab") or ""
+        return {"n": [int(summary.get(v, 0)) for v in VERDICTS], "rows": rows, "at": int(time.time()),
+                "err": "" if gl in ("ok", "off") else clip("GitLab: %s" % gl, MAX_ERR), "_links": links}
+
+
+def branches_source(cfg):
+    """Branches when branches.py is there (or work.json's "branches.script"), unless disabled."""
+    b = (cfg or {}).get("branches") or {}
+    if not b.get("enabled", True):
+        return None
+    src = Branches(b)
+    return src if os.path.isfile(src.script) else None
+
+
+# ---------------------------------------------------------------------------
 # Polling and pushing
 # ---------------------------------------------------------------------------
 def load_config(path=CONFIG_FILE):
@@ -498,6 +570,9 @@ def make_sources(cfg):
     j, site = cfg.get("jira") or {}, atlassian_site(cfg)
     if j.get("enabled", True) and site.get("url") and site.get("token"):
         sources["jira"] = Jira(j, site)
+    br = branches_source(cfg)
+    if br:
+        sources["branches"] = br
     return sources
 
 
@@ -506,6 +581,8 @@ def poll_once(cfg):
     Confluence, when enabled with a token, is checked too."""
     out = {}
     for name, src in make_sources(cfg).items():
+        if name == "branches":  # a slow scan, only on the deck's demand
+            continue
         try:
             out[name] = src.poll()
             out[name].pop("_links", None)
@@ -536,14 +613,19 @@ class Worker(threading.Thread):
         self.last_push = {"ok": None, "at": 0.0, "addr": ""}
         self.had_sources = False
         self.links = {}  # source -> (links of the last poll, of the one before)
+        self.scanning = False  # a branches scan is running
         self.configure(cfg)
 
     def configure(self, cfg):
         sources = make_sources(cfg)
         with self.lock:
+            old = getattr(self, "state", {})
             self.sources = sources
             self.state = {name: {"err": "connecting..."} for name in sources}
             self.due = {name: 0.0 for name in sources}
+            if "branches" in sources:  # never on a timer; the last scan survives a new config
+                self.due["branches"] = float("inf")
+                self.state["branches"] = dict(old.get("branches") or {"n": [0, 0, 0], "rows": [], "at": 0, "err": ""})
             self.polled = {}  # name -> wall time of the last good poll
             self.pushed = None
             self.had_sources = self.had_sources or bool(sources)
@@ -585,6 +667,41 @@ class Worker(threading.Thread):
                     self.polled[name] = time.time()
                 else:
                     self.state[name] = dict(self.state[name], err=http_error(err))
+        self.push()
+
+    def scan_branches(self, _rest=""):
+        """The deck's "branches_scan": runs branches.py in its own thread (it takes
+        a while) and pushes the result; the deck shows "scanning" meanwhile."""
+        with self.lock:
+            src = self.sources.get("branches")
+            if not src:
+                return False, "no branches.py on this PC"
+            if self.scanning:
+                return True, ""
+            self.scanning = True
+            self.state["branches"] = dict(self.state["branches"], scanning=True)
+        threading.Thread(target=self._scan, args=(src,), daemon=True, name="td_branches").start()
+        self.push()
+        return True, ""
+
+    def _scan(self, src):
+        try:
+            data, err = src.poll(), None
+        except Exception as e:
+            data, err = None, e
+            print("work: branches: %s" % e, flush=True)
+        with self.lock:
+            self.scanning = False
+            if self.sources.get("branches") is src:
+                if err is None:
+                    new = data.pop("_links", {})
+                    self.links["branches"] = (new, self.links.get("branches", ({}, {}))[0])
+                    self.state["branches"] = data
+                    self.polled["branches"] = time.time()
+                else:
+                    st = dict(self.state["branches"], err=http_error(err))
+                    st.pop("scanning", None)
+                    self.state["branches"] = st
         self.push()
 
     def open_link(self, lid):

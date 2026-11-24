@@ -326,6 +326,10 @@ void makePrinterContent(TileRt& r, lv_obj_t* t) {
       lv_obj_set_style_bg_opa(r.px[0], LV_OPA_COVER, 0);
       lv_obj_set_style_bg_color(r.px[0], lv_color_hex(C_PRN_HEAT), 0);
       lv_obj_add_flag(r.px[0], LV_OBJ_FLAG_HIDDEN);
+      if (d.show == PS_CHAMBER) {  // the air duct mode (P2S): snowflake / flame, right-aligned
+        r.icon = prnLabel(top, &deck_font_12, LV_OPA_COVER);
+        lv_obj_add_flag(r.icon, LV_OBJ_FLAG_HIDDEN);
+      }
       lv_obj_t* row = prnBox(t, LV_FLEX_FLOW_ROW);
       lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
       lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
@@ -406,6 +410,45 @@ void makePrinterContent(TileRt& r, lv_obj_t* t) {
       lv_obj_set_width(r.unit, lv_pct(100));
       break;
     }
+    case PS_FANS: {
+      // "Fans" and its icon, then one row per fan (part, aux, chamber); short
+      // tiles show them on one line instead (r.sub).
+      lv_obj_set_style_pad_row(t, 1, 0);
+      lv_obj_t* top = prnBox(t, LV_FLEX_FLOW_ROW);
+      lv_obj_set_size(top, lv_pct(100), LV_SIZE_CONTENT);
+      lv_obj_set_flex_align(top, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+      lv_obj_set_style_pad_column(top, 5, 0);
+      const uint32_t cp = iconCodepoint("mdi:fan");
+      const lv_font_t* f = cp ? iconFont(14) : nullptr;
+      if (f) {
+        r.icon = prnLabel(top, &deck_font_12, LV_OPA_70);
+        char u[5];
+        iconUtf8(cp, u);
+        setFont(r.icon, f);
+        lv_label_set_text(r.icon, u);
+      }
+      r.name = prnLabel(top, &deck_font_12, LV_OPA_70);
+      lv_label_set_text(r.name, "Fans");
+      r.sub = prnLabel(top, &deck_font_12, LV_OPA_COVER);
+      lv_obj_set_flex_grow(r.sub, 1);
+      lv_obj_set_style_text_align(r.sub, LV_TEXT_ALIGN_RIGHT, 0);
+      lv_label_set_long_mode(r.sub, LV_LABEL_LONG_MODE_DOTS);
+      static const char* const kFanNames[3] = {"Part", "Aux", "Chamber"};
+      for (int i = 0; i < 3; i++) {
+        lv_obj_t* row = prnBox(t, LV_FLEX_FLOW_ROW);
+        lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(row, 4, 0);
+        lv_obj_t* name = prnLabel(row, &deck_font_12, LV_OPA_70);
+        lv_label_set_text(name, kFanNames[i]);
+        lv_label_set_long_mode(name, LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_set_flex_grow(name, 1);
+        lv_obj_set_height(name, lineH(&deck_font_12));
+        prnLabel(row, &deck_font_14, LV_OPA_COVER);  // its %
+        r.px[i] = row;
+      }
+      break;
+    }
     case PS_LIGHT: {
       r.chip = lv_obj_create(t);
       lv_obj_remove_flag(r.chip, (lv_obj_flag_t)(LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
@@ -479,6 +522,12 @@ bool prnShown(const PrinterState* s) {
   const uint32_t at = millis() + (PRN_GRACE_MS - age);
   if (!s_prnGraceAt || (int32_t)(at - s_prnGraceAt) > 0) s_prnGraceAt = at;
   return true;
+}
+
+bool printerOnlineNow(const String& id) {
+  for (size_t i = 0; i < s_cfg.printers.size() && i < MAX_PRINTERS; i++)
+    if (s_cfg.printers[i].id == id) return prnShown(s_prnHave[i] ? s_prn[i] : nullptr);
+  return false;
 }
 
 // Any printer with a job (preparing, printing or paused), for presence.
@@ -577,6 +626,16 @@ void fitPrinter(TileRt& r, int cw, int ch) {
       showObj(r.unit, row ? cw >= 140 : cw >= 86);
       prnOneLine(r.name);
       if (row != r.besideName) {  // "Left" / "Left nozzle"
+        r.besideName = row;
+        r.prnKey = 0;
+        applyPrinterToTile(r);
+      }
+      break;
+    }
+    case PS_FANS: {
+      // Too low for three rows: "0 · 40 · 40%" beside the name.
+      const bool row = ch < 56;
+      if (row != r.besideName) {
         r.besideName = row;
         r.prnKey = 0;
         applyPrinterToTile(r);
@@ -788,6 +847,7 @@ uint32_t prnTileKey(const TileRt& r, const PrinterState* s, bool online) {
       k.add(s->bed);
       k.add(s->bedTarget);
       k.add(s->chamber);
+      k.add((int32_t)s->duct);
       break;
     case PS_LAYER:
       k.add((int32_t)s->layer);
@@ -796,6 +856,10 @@ uint32_t prnTileKey(const TileRt& r, const PrinterState* s, bool online) {
       break;
     case PS_LIGHT:
       k.add((int32_t)s->light);
+      break;
+    case PS_FANS:
+      k.add(s->fan, sizeof(s->fan));
+      k.add((int32_t)r.besideName);
       break;
     case PS_AMS:
     case PS_SLOTS:
@@ -1066,6 +1130,22 @@ void applyPrinterToTile(TileRt& r) {
       } else if (s) now = s->chamber;
       lv_label_set_text(r.name, label);
       showObj(r.px[0], active);
+      if (r.icon && d.show == PS_CHAMBER) {
+        // P2S air duct: Cooling lets outside air in (side flap open), Heating closes
+        // it and recirculates the chamber's. A snowflake or a flame; words without the icon font.
+        const int8_t duct = online && s ? s->duct : -1;
+        const bool known = duct == 0 || duct == 1;
+        showObj(r.icon, known);
+        if (known) {
+          const uint32_t cp = iconCodepoint(duct ? "mdi:fire" : "mdi:snowflake");
+          const lv_font_t* f = cp ? iconFont(14) : nullptr;
+          char u[5];
+          if (f) iconUtf8(cp, u);
+          setFont(r.icon, f ? f : &deck_font_12);
+          lv_label_set_text(r.icon, f ? u : duct ? "Heat" : "Cool");
+          lv_obj_set_style_text_color(r.icon, lv_color_hex(duct ? C_PRN_HEAT : C_PRN_BLUE), 0);
+        }
+      }
       const bool heating = online && isfinite(target) && target > 0;
       if (heating) snprintf(b, sizeof(b), "/%.0f", target);
       else b[0] = 0;
@@ -1144,6 +1224,31 @@ void applyPrinterToTile(TileRt& r) {
         lv_label_set_text(r.sub, "--");
         lv_label_set_text(r.unit, "");
       }
+      break;
+    }
+    case PS_FANS: {
+      // Rows for the fans this printer reports; the short layout puts them on one line.
+      char line[32] = "";
+      int shown = 0;
+      for (int i = 0; i < 3; i++) {
+        const int v = online ? s->fan[i] : -1;
+        showObj(r.px[i], !r.besideName && (v >= 0 || !online));
+        lv_obj_t* val = lv_obj_get_child(r.px[i], 1);
+        if (v >= 0) snprintf(b, sizeof(b), "%d%%", v);
+        else strcpy(b, "--");
+        lv_label_set_text(val, b);
+        if (v > 0) lv_obj_set_style_text_color(val, lv_color_hex(C_PRN_BLUE), 0);
+        else lv_obj_remove_local_style_prop(val, LV_STYLE_TEXT_COLOR, LV_PART_MAIN);
+        lv_obj_set_style_text_opa(val, v > 0 ? LV_OPA_COVER : LV_OPA_60, 0);
+        if (v >= 0) {
+          const size_t n = strlen(line);
+          snprintf(line + n, sizeof(line) - n, "%s%d", shown++ ? " \xC2\xB7 " : "", v);
+        }
+      }
+      if (shown) strlcat(line, "%", sizeof(line));
+      // P2S-style air duct: Cooling lets outside air in (side flap open), Heating
+      // closes it and recirculates the chamber's.
+      lv_label_set_text(r.sub, r.besideName ? (shown ? line : "--") : "");
       break;
     }
     case PS_LIGHT: {

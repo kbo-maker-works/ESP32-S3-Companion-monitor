@@ -362,6 +362,8 @@ class Printer:
         self.ch = None
         self.door = -1
         self.light = -1        # chamber light: -1 unknown, 0 off, 1 on (shown, never switched from here)
+        self.fan = [-1, -1, -1]  # part cooling, auxiliary, chamber fan in %, -1 = not reported
+        self.duct = -1         # air duct mode (P2S): 0 cooling (outside air in), 1 heating (recirculates)
         self.perr = None       # print_error, None until reported
         self.hms = None        # [[attr, code]], None until reported
         self.ams = []          # [{"id", "slots", "hum", "temp", "dry", "tray": [tray x slots]}]
@@ -478,6 +480,14 @@ class Printer:
             v = num(p.get(key))
             if v is not None:
                 self.bed[k] = float(v)
+        # Fans as 0..15 gears; Bambu Studio shows floor(gear / 1.5) * 10 %.
+        for i, key in enumerate(("cooling_fan_speed", "big_fan1_speed", "big_fan2_speed")):
+            v = num(p.get(key))
+            if v is not None:
+                self.fan[i] = min(100, int(max(0, v) // 1.5) * 10)
+        airduct = (p.get("device") or {}).get("airduct") if isinstance(p.get("device"), dict) else None
+        if isinstance(airduct, dict) and num(airduct.get("modeCur")) is not None:
+            self.duct = int(num(airduct["modeCur"]))
         for light in p.get("lights_report") or []:
             if isinstance(light, dict) and light.get("node") == "chamber_light" and isinstance(light.get("mode"), str):
                 self.light = 0 if light["mode"] == "off" else 1
@@ -530,7 +540,7 @@ class Printer:
             "st": self.st, "job": self.job, "pct": self.pct, "left": self.left,
             "layer": self.layer, "layers": self.layers, "spd": self.spd, "stg": self.stg,
             "dual": int(self.dual), "an": self.an, "noz": self.noz if self.dual else self.noz[:1],
-            "bed": self.bed, "ch": self.ch, "door": self.door, "light": self.light,
+            "bed": self.bed, "ch": self.ch, "door": self.door, "light": self.light, "fan": self.fan, "duct": self.duct,
             "ams": [{"id": u["id"], "n": u["slots"], "h": u["hum"], "t": u["temp"], "dry": u["dry"],
                      "tr": [tray(t) for t in u["tray"]]} for u in self.ams],
             "au": self.au, "as": self.as_, "ext": tray(self.ext), "map": self.map})

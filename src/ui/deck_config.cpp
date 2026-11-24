@@ -10,8 +10,8 @@
 
 namespace deck {
 
-const char* const kPrinterShowIds[PS_SUMMARY + 1] = {"hero",  "nozzle", "bed", "chamber", "filament",
-                                                      "layer", "light",  "ams", "slots",   "summary"};
+const char* const kPrinterShowIds[PS_COUNT] = {"hero",  "nozzle", "bed", "chamber", "filament", "layer",
+                                               "light", "ams",    "slots", "summary", "fans"};
 
 namespace {
 
@@ -173,9 +173,40 @@ bool parseWhen(JsonVariantConst v, WhenDef& w, String* err, const String& where)
   const char* s = v.is<const char*>() ? v.as<const char*>() : "";
   if (!strcmp(s, "pc-on")) w.kind = WHEN_PC_ON;
   else if (!strcmp(s, "pc-off")) w.kind = WHEN_PC_OFF;
+  else if (!strcmp(s, "printer-on")) w.kind = WHEN_PRINTER_ON;
   else {
-    if (err) *err = where + ": when must be \"pc-on\" or \"pc-off\"";
+    if (err) *err = where + ": when must be \"pc-on\", \"pc-off\" or \"printer-on\"";
     return false;
+  }
+  return true;
+}
+
+// The printer a "printer-on" condition follows: the page's own printer, else
+// its first printer tile's (an AMS page in the printer's group), else the only
+// printer configured. "" when none fits.
+String whenPrinterOf(const PageDef& p, const std::vector<PrinterDef>& printers) {
+  if (p.printer.length()) return p.printer;
+  for (const TileDef& t : p.tiles)
+    if (t.printer.length()) return t.printer;
+  return printers.size() == 1 ? printers[0].id : String();
+}
+
+bool resolveWhenPrinters(PageDef& p, const std::vector<PrinterDef>& printers, String* err) {
+  const String own = whenPrinterOf(p, printers);
+  if (p.when.kind == WHEN_PRINTER_ON) {
+    if (!own.length()) {
+      if (err) *err = "page '" + p.id + "': \"printer-on\" needs a printer (the page's, or one of its printer tiles')";
+      return false;
+    }
+    p.when.printer = own;
+  }
+  for (TileDef& t : p.tiles) {
+    if (t.when.kind != WHEN_PRINTER_ON) continue;
+    t.when.printer = t.printer.length() ? t.printer : own;
+    if (!t.when.printer.length()) {
+      if (err) *err = "page '" + p.id + "', tile '" + t.id + "': \"printer-on\" needs a printer";
+      return false;
+    }
   }
   return true;
 }
@@ -276,7 +307,7 @@ bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err)
     if (!strcmp(type, "metrics")) continue;
     if (!p.id.length()) p.id = "page" + String(cfg.pages.size() + 1);
     if (!parseWhen(pv["when"], p.when, err, "page '" + p.id + "'")) return false;
-    p.autoShow = p.when.kind != WHEN_ALWAYS && (pv["auto"] | false);
+    p.autoShow = (p.when.kind != WHEN_ALWAYS || p.printer.length()) && (pv["auto"] | false);
     p.home = pv["home"] | false;
     JsonObjectConst lv = pv["led"].as<JsonObjectConst>();
     if (!lv.isNull()) {
@@ -403,8 +434,8 @@ bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err)
         }
         const char* sh = tv["show"] | "hero";
         int k = 0;
-        while (k <= PS_SUMMARY && strcmp(sh, kPrinterShowIds[k])) k++;
-        if (k > PS_SUMMARY) {
+        while (k < PS_COUNT && strcmp(sh, kPrinterShowIds[k])) k++;
+        if (k >= PS_COUNT) {
           if (err) *err = where + ": unknown show '" + sh + "'";
           return false;
         }
@@ -455,6 +486,7 @@ bool deckConfigParse(const char* json, size_t len, DeckConfig& out, String* err)
       if (tv["hold"].isNull() && t.type == TILE_ACTION) t.hold.kind = ACT_DETAIL;
       p.tiles.push_back(std::move(t));
     }
+    if (!resolveWhenPrinters(p, cfg.printers, err)) return false;
     cfg.pages.push_back(std::move(p));
   }
   if (cfg.pages.empty()) {

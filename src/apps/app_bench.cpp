@@ -3,6 +3,11 @@
 // dropped. Colour words (red, rojo...) get a swatch, "->" becomes an arrow.
 // The sheet lives on the SD card (or LittleFS) as sheet.txt or sheet.jpg plus
 // meta.json, and the current step in "step", so a reboot keeps it.
+//
+// A plan sheet (pc-agent/td_plan.py: the pinned PLANS/*.md's "## Progreso")
+// is read-only: each line's "[x]" / "[~]" / "[ ]" says its state, the step
+// shown is the first "[~]" (else the first "[ ]"), and taps don't move it; the
+// session implementing the plan ticks the file and the agent pushes it again.
 #include "apps/app_bench.h"
 #include "ui/deck_ui_int.h"
 #include "ui/deck_config.h"
@@ -12,6 +17,7 @@
 #include "hardware/haptic.h"
 #include <ArduinoJson.h>
 #include <algorithm>
+#include <time.h>
 #include <esp_heap_caps.h>
 #include <src/libs/tjpgd/tjpgd.h>
 #include <src/misc/cache/instance/lv_image_cache.h>
@@ -33,10 +39,13 @@ struct Sheet {
   char title[BENCH_MAX_TITLE + 1];
   char* text;  // PSRAM, kind 't'
   int step;    // text: the current step; == the step count = all done
+  bool plan;   // a read-only plan: the steps' own marks say where it is
+  uint32_t at; // epoch seconds of the last push, 0 = unknown
   int imgW, imgH;
   uint32_t seq;  // bumps with every new sheet
 };
 Sheet s_sheet = {};
+bool s_planList = true;  // a plan shows its whole checklist; a tap toggles to the current step alone
 bool s_pendingOpen = false;
 uint32_t s_stepDirtyAt = 0;
 
@@ -61,6 +70,8 @@ void writeMeta() {
   JsonDocument doc;
   doc["kind"] = s_sheet.kind == 'i' ? "image" : "text";
   doc["title"] = s_sheet.title;
+  if (s_sheet.plan) doc["plan"] = true;
+  if (s_sheet.at) doc["at"] = s_sheet.at;
   String out;
   serializeJson(doc, out);
   writeFile(file("meta.json"), out.c_str(), out.length());
@@ -163,6 +174,8 @@ void ensureLoaded() {
   f.close();
   if (bad) return;
   strlcpy(s_sheet.title, doc["title"] | "", sizeof(s_sheet.title));
+  s_sheet.plan = doc["plan"] | false;
+  s_sheet.at = doc["at"] | 0;
   const char* kind = doc["kind"] | "";
   if (!strcmp(kind, "text")) {
     File t = fsys().open(file("sheet.txt"), "r");
@@ -191,6 +204,7 @@ void ensureLoaded() {
 struct Step {
   const char* text;  // cleaned, in s_clean
   int heading;       // index into s_heads, -1 = none
+  char mark;         // its checkbox: 'x' done, '~' doing, ' ' to do, 0 none
 };
 Step s_steps[MAX_STEPS];
 const char* s_heads[MAX_STEPS];
@@ -199,15 +213,18 @@ char* s_clean = nullptr;  // PSRAM: the cleaned lines, NUL-separated
 
 bool startsWith(const char* s, const char* p) { return !strncmp(s, p, strlen(p)); }
 
-// Drops a list marker: "- ", "* ", "+ ", "• ", "[ ] ", "[x] ", "12. ", "12) ".
-const char* skipMarker(const char* s) {
+// Drops a list marker: "- ", "* ", "+ ", "• ", "[ ] ", "[x] ", "[~] ", "12. ", "12) ".
+// mark gets the checkbox's state ('x', '~', ' ') or 0.
+const char* skipMarker(const char* s, char& mark) {
+  mark = 0;
   for (const char* m : {"- ", "* ", "+ ", "\xE2\x80\xA2 "})
     if (startsWith(s, m)) {
       s += strlen(m);
       break;
     }
-  for (const char* m : {"[ ] ", "[x] ", "[X] "})
+  for (const char* m : {"[ ] ", "[x] ", "[X] ", "[~] "})
     if (startsWith(s, m)) {
+      mark = m[1] == 'X' ? 'x' : m[1];
       s += strlen(m);
       break;
     }
@@ -262,9 +279,10 @@ void parseSteps() {
         heading = s_headCount++;
       }
     } else if (p < end) {
-      const char* s = skipMarker(p);
+      char mark;
+      const char* s = skipMarker(p, mark);
       if (s < end) {
-        s_steps[s_stepCount++] = {out, heading};
+        s_steps[s_stepCount++] = {out, heading, mark};
         out = copyLine(out, s, end);
       }
     }
@@ -457,6 +475,72 @@ void buildEmpty() {
   lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
 }
 
+// A plan's whole checklist: its "#" groups, then each step with its state
+// (done ticked and struck through, in progress amber, to do an empty ring),
+// scrolled so the current step shows. Drags scroll it, a tap goes to the body.
+void buildChecklist(int x, int y, int w, int h, int current) {
+  lv_obj_t* list = lv_obj_create(s_body);
+  lv_obj_remove_style_all(list);
+  lv_obj_set_pos(list, x, y);
+  lv_obj_set_size(list, w, h);
+  lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_row(list, 4, 0);
+  lv_obj_set_style_pad_bottom(list, 6, 0);
+  lv_obj_add_flag(list, (lv_obj_flag_t)(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_EVENT_BUBBLE));
+  lv_obj_set_scroll_dir(list, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_ACTIVE);
+  const int textW = w - 26 - 6;
+  lv_obj_t *target = nullptr, *head = nullptr, *targetHead = nullptr;
+  int heading = -1;
+  for (int i = 0; i < s_stepCount; i++) {
+    const Step& st = s_steps[i];
+    if (st.heading != heading && st.heading >= 0) {
+      head = oneLine(list, &deck_font_14, C_ACCENT, s_heads[st.heading], w);
+      if (i) lv_obj_set_style_margin_top(head, 6, 0);
+    }
+    heading = st.heading;
+    const bool isDone = st.mark == 'x', isDoing = st.mark == '~';
+    lv_obj_t* row = box(list);
+    lv_obj_set_size(row, w, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_column(row, 6, 0);
+    lv_obj_set_style_pad_ver(row, 3, 0);
+    lv_obj_set_style_pad_left(row, 4, 0);
+    lv_obj_set_style_radius(row, 6, 0);
+    if (i == current) {
+      lv_obj_set_style_bg_color(row, lv_color_hex(C_TILE), 0);
+      lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+      target = row;
+      targetHead = head;
+    }
+    lv_obj_t* icon = box(row);
+    lv_obj_set_size(icon, 22, lineH(&deck_font_14));
+    if (isDone || isDoing) {
+      lv_obj_center(label(icon, &deck_font_14, isDone ? C_OK : C_WARN, isDone ? LV_SYMBOL_OK : LV_SYMBOL_PLAY));
+    } else {
+      lv_obj_t* ring = box(icon);
+      lv_obj_set_size(ring, 11, 11);
+      lv_obj_set_style_radius(ring, LV_RADIUS_CIRCLE, 0);
+      lv_obj_set_style_border_width(ring, 2, 0);
+      lv_obj_set_style_border_color(ring, lv_color_hex(i == current ? C_ACCENT : C_DIM), 0);
+      lv_obj_center(ring);
+    }
+    lv_obj_t* t = label(row, &deck_font_14, isDone ? C_DIM : isDoing ? C_WARN : C_TEXT, st.text);
+    lv_obj_set_width(t, textW);
+    lv_label_set_long_mode(t, LV_LABEL_LONG_MODE_WRAP);
+    if (isDone) lv_obj_set_style_text_decor(t, LV_TEXT_DECOR_STRIKETHROUGH, 0);
+  }
+  if (!target) return;  // all done: from the top
+  lv_obj_update_layout(list);
+  // The current step a third of the way down: what is done just above, what is
+  // left below; higher up when that shows its group's heading too.
+  int top = lv_obj_get_y(target) - h / 3;
+  if (targetHead && lv_obj_get_y(target) + lv_obj_get_height(target) - lv_obj_get_y(targetHead) <= h)
+    top = LV_MIN(top, lv_obj_get_y(targetHead));
+  lv_obj_scroll_to_y(list, LV_MAX(0, top), LV_ANIM_OFF);
+}
+
 void buildText() {
   parseSteps();
   const int pad = 16, iw = s_w - 2 * pad;
@@ -465,14 +549,28 @@ void buildText() {
     return;
   }
   int& step = s_sheet.step;
+  int doneN = 0;  // plan: the steps ticked
+  if (s_sheet.plan) {  // where the plan is: the first "[~]", else the first "[ ]"
+    int doing = -1, todo = -1;
+    for (int i = 0; i < s_stepCount; i++) {
+      const char m = s_steps[i].mark;
+      if (m == 'x') doneN++;
+      else if (m == '~' && doing < 0) doing = i;
+      else if (m != '~' && todo < 0) todo = i;
+    }
+    step = doing >= 0 ? doing : todo >= 0 ? todo : s_stepCount;
+  }
   if (step < 0) step = 0;
   if (step > s_stepCount) step = s_stepCount;
   const bool done = step == s_stepCount;
+  const bool doingNow = s_sheet.plan && !done && s_steps[step].mark == '~';
 
   // Title and progress
   char buf[24];
-  lv_obj_set_pos(oneLine(s_body, &deck_font_14, C_DIM, s_sheet.title[0] ? s_sheet.title : "Bench", iw - 80), pad, 8);
-  snprintf(buf, sizeof(buf), "%d / %d", done ? s_stepCount : step + 1, s_stepCount);
+  lv_obj_set_pos(oneLine(s_body, &deck_font_14, C_DIM, s_sheet.title[0] ? s_sheet.title : "Bench",
+                         iw - (s_sheet.plan ? 110 : 80)), pad, 8);
+  if (s_sheet.plan) snprintf(buf, sizeof(buf), "%d / %d done", doneN, s_stepCount);
+  else snprintf(buf, sizeof(buf), "%d / %d", done ? s_stepCount : step + 1, s_stepCount);
   lv_obj_t* prog = label(s_body, &deck_font_14, C_DIM, buf);
   lv_obj_align(prog, LV_ALIGN_TOP_RIGHT, -pad, 8);
   lv_obj_t* track = box(s_body);
@@ -485,15 +583,31 @@ void buildText() {
   lv_obj_set_style_bg_color(fill, lv_color_hex(C_ACCENT), 0);
   lv_obj_set_style_bg_opa(fill, LV_OPA_COVER, 0);
   lv_obj_set_style_radius(fill, 2, 0);
-  lv_obj_set_size(fill, std::max(4, iw * step / s_stepCount), 4);
+  lv_obj_set_size(fill, std::max(4, iw * (s_sheet.plan ? doneN : step) / s_stepCount), 4);
 
   // Hints at the bottom: the two halves of the screen
   const int hintY = s_h - lineH(&deck_font_14) - 6;
-  lv_obj_t* back = label(s_body, &deck_font_14, C_DIM, LV_SYMBOL_LEFT "  Back");
-  lv_obj_set_pos(back, pad, hintY);
-  if (!step) lv_obj_add_flag(back, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_t* fwd = label(s_body, &deck_font_14, C_DIM, done ? "Start again  " LV_SYMBOL_RIGHT : "Next  " LV_SYMBOL_RIGHT);
-  lv_obj_align(fwd, LV_ALIGN_BOTTOM_RIGHT, -pad, -6);
+  if (s_sheet.plan) {  // read-only: no back / next, when it last changed and what a tap does
+    char when[48] = "Plan  " LV_SYMBOL_REFRESH "  follows the file";
+    struct tm tm;
+    const time_t at = s_sheet.at;
+    if (at > 1700000000 && localtime_r(&at, &tm))
+      strftime(when, sizeof(when), "Plan  " LV_SYMBOL_REFRESH "  updated %H:%M", &tm);
+    lv_obj_set_pos(label(s_body, &deck_font_14, C_DIM, when), pad, hintY);
+    lv_obj_t* hint = label(s_body, &deck_font_14, C_DIM, s_planList ? "Tap: current step" : "Tap: checklist");
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_RIGHT, -pad, -6);
+  } else {
+    lv_obj_t* back = label(s_body, &deck_font_14, C_DIM, LV_SYMBOL_LEFT "  Back");
+    lv_obj_set_pos(back, pad, hintY);
+    if (!step) lv_obj_add_flag(back, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_t* fwd = label(s_body, &deck_font_14, C_DIM, done ? "Start again  " LV_SYMBOL_RIGHT : "Next  " LV_SYMBOL_RIGHT);
+    lv_obj_align(fwd, LV_ALIGN_BOTTOM_RIGHT, -pad, -6);
+  }
+
+  if (s_sheet.plan && s_planList) {
+    buildChecklist(pad, 44, iw, hintY - 6 - 44, step);
+    return;
+  }
 
   lv_obj_t* col = box(s_body);
   const int top = 44, colH = hintY - 8 - top;
@@ -514,9 +628,10 @@ void buildText() {
   const Step& cur = s_steps[step];
   if (cur.heading >= 0) oneLine(col, &deck_font_14, C_ACCENT, s_heads[cur.heading], iw);
   if (step > 0) {
-    String prev = String(LV_SYMBOL_OK "  ") + s_steps[step - 1].text;
+    const bool ticked = !s_sheet.plan || s_steps[step - 1].mark == 'x';
+    String prev = String(ticked ? LV_SYMBOL_OK "  " : "      ") + s_steps[step - 1].text;
     lv_obj_t* l = oneLine(col, &deck_font_14, C_DIM, prev.c_str(), iw);
-    lv_obj_set_style_text_decor(l, LV_TEXT_DECOR_STRIKETHROUGH, 0);
+    if (ticked) lv_obj_set_style_text_decor(l, LV_TEXT_DECOR_STRIKETHROUGH, 0);
   }
 
   // The current step: number, swatches, text (28 px, 20 when long)
@@ -528,7 +643,7 @@ void buildText() {
   lv_obj_t* badge = box(row);
   lv_obj_set_size(badge, 38, 38);
   lv_obj_set_style_radius(badge, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(badge, lv_color_hex(C_ACCENT), 0);
+  lv_obj_set_style_bg_color(badge, lv_color_hex(doingNow ? C_WARN : C_ACCENT), 0);  // plan: amber = in progress
   lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
   snprintf(buf, sizeof(buf), "%d", step + 1);
   lv_obj_center(label(badge, &deck_font_20, C_TEXT_ON, buf));
@@ -568,9 +683,13 @@ void buildText() {
   lv_label_set_long_mode(t, LV_LABEL_LONG_MODE_WRAP);
 
   for (int i = 1; i <= nextN; i++) {
-    snprintf(buf, sizeof(buf), "%d   ", step + 1 + i);
-    String line = String(buf) + s_steps[step + i].text;
-    oneLine(col, &deck_font_20, C_DIM, line.c_str(), iw);
+    const Step& n = s_steps[step + i];
+    if (s_sheet.plan && n.mark == 'x') snprintf(buf, sizeof(buf), LV_SYMBOL_OK "  ");
+    else if (s_sheet.plan && n.mark == '~') snprintf(buf, sizeof(buf), "%d " LV_SYMBOL_PLAY " ", step + 1 + i);
+    else snprintf(buf, sizeof(buf), "%d   ", step + 1 + i);
+    String line = String(buf) + n.text;
+    lv_obj_t* l = oneLine(col, &deck_font_20, n.mark == '~' && s_sheet.plan ? C_WARN : C_DIM, line.c_str(), iw);
+    if (s_sheet.plan && n.mark == 'x') lv_obj_set_style_text_decor(l, LV_TEXT_DECOR_STRIKETHROUGH, 0);
   }
 }
 
@@ -643,6 +762,12 @@ void stepBy(int d) {
 
 // x, y in body coordinates.
 bool tapAt(int x, int y) {
+  if (s_sheet.kind == 't' && s_sheet.plan) {  // read-only: a tap only switches checklist / current step
+    if (!s_stepCount) return false;
+    s_planList = !s_planList;
+    build();
+    return true;
+  }
   if (s_sheet.kind == 't' && s_stepCount) {
     stepBy(x < s_w / 2 ? -1 : 1);
     return true;
@@ -726,7 +851,7 @@ String benchUploadPath() {
   return file("upload.up");
 }
 
-bool benchPushText(const char* title, const char* text, String& err) {
+bool benchPushText(const char* title, const char* text, String& err, bool plan, bool quiet) {
   const size_t len = text ? strlen(text) : 0;
   if (!len) {
     err = "empty text";
@@ -737,6 +862,17 @@ bool benchPushText(const char* title, const char* text, String& err) {
     return false;
   }
   ensureLoaded();
+  const time_t now = time(nullptr);
+  const uint32_t at = now > 1700000000 ? (uint32_t)now : 0;
+  // The same plan again (the file changed outside its checklist): only the time moves.
+  if (plan && s_sheet.plan && s_sheet.kind == 't' && s_sheet.text && !strcmp(s_sheet.text, text) &&
+      !strcmp(s_sheet.title, title ? title : "")) {
+    s_sheet.at = at;
+    if (!quiet) s_pendingOpen = true;
+    if (benchStorageReady()) writeMeta();
+    s_sheet.seq++;  // the open view redraws "updated"
+    return true;
+  }
   setSheetText(text, len);
   if (!s_sheet.text) {
     err = "out of memory";
@@ -745,8 +881,11 @@ bool benchPushText(const char* title, const char* text, String& err) {
   strlcpy(s_sheet.title, title ? title : "", sizeof(s_sheet.title));
   s_sheet.kind = 't';
   s_sheet.step = 0;
+  s_sheet.plan = plan;
+  s_sheet.at = at;
   s_sheet.seq++;
-  s_pendingOpen = true;
+  if (!quiet) s_pendingOpen = true;  // a plan's updates redraw it in place, only pinning opens it
+  if (plan && !quiet) s_planList = true;  // a new pin starts on the checklist
   if (benchStorageReady()) {  // kept in RAM even when it cannot be stored
     ensureDir();
     fsys().remove(file("sheet.jpg"));
@@ -775,6 +914,8 @@ bool benchPushImage(const char* title, String& err) {
   setSheetText(nullptr, 0);
   strlcpy(s_sheet.title, title ? title : "", sizeof(s_sheet.title));
   s_sheet.kind = 'i';
+  s_sheet.plan = false;
+  s_sheet.at = 0;
   s_sheet.imgW = w;
   s_sheet.imgH = h;
   s_sheet.step = 0;
@@ -795,6 +936,7 @@ void benchJson(String& out) {
     doc["steps"] = s_stepCount;
     doc["step"] = s_sheet.step;
     doc["done"] = s_stepCount && s_sheet.step >= s_stepCount;
+    doc["plan"] = s_sheet.plan;
   } else if (s_sheet.kind == 'i') {
     doc["w"] = s_sheet.imgW;
     doc["h"] = s_sheet.imgH;
@@ -820,7 +962,7 @@ void benchDeckTick() {
 bool benchTestOp(const String& op, int x, int y) {
   if (!s_body) return false;
   if (op == "next" || op == "back") {
-    if (s_sheet.kind != 't' || !s_stepCount) return false;
+    if (s_sheet.kind != 't' || !s_stepCount || s_sheet.plan) return false;
     stepBy(op == "next" ? 1 : -1);
     return true;
   }

@@ -402,7 +402,9 @@ void report(void* context, const char* topic, const uint8_t* payload, size_t len
                          "mc_remaining_time", "layer_num", "total_layer_num", "spd_lvl",
                          "nozzle_temper", "nozzle_target_temper", "bed_temper",
                          "bed_target_temper", "chamber_temper", "lights_report", "stg_cur",
-                         "print_error", "hms", "stat", "home_flag"}) pf[key] = true;
+                         "print_error", "hms", "stat", "home_flag", "cooling_fan_speed",
+                         "big_fan1_speed", "big_fan2_speed"}) pf[key] = true;
+  pf["device"]["airduct"]["modeCur"] = true;
   if (filter.overflowed()) { link(c, PRN_FAILED, "No PSRAM for JSON filter"); return; }
   const auto error = deserializeJson(doc, (const char*)payload, length,
                                     DeserializationOption::Filter(filter), DeserializationOption::NestingLimit(32));
@@ -535,6 +537,16 @@ void report(void* context, const char* topic, const uint8_t* payload, size_t len
   }
   mergeTemp("bed_temper", s.bed);
   mergeTemp("bed_target_temper", s.bedTarget);
+  // Fans as 0..15 gears (a number or a string); Bambu Studio shows floor(gear / 1.5) * 10 %.
+  static const char* const kFans[3] = {"cooling_fan_speed", "big_fan1_speed", "big_fan2_speed"};
+  for (int i = 0; i < 3; i++) {
+    JsonVariantConst v = p[kFans[i]];
+    if (v.isNull()) continue;
+    const long gear = v.is<const char*>() ? atol(v.as<const char*>()) : integer(v);
+    s.fan[i] = (int8_t)constrain((long)(gear / 1.5f) * 10, 0L, 100L);
+  }
+  JsonVariantConst duct = p["device"]["airduct"]["modeCur"];
+  if (number(duct)) s.duct = (int8_t)constrain(integer(duct), -1L, 100L);
   // P1 reports a bogus chamber value. Only known X1 sensors use this field.
   if (!c.ctcSeen && (c.conn.serial.startsWith("00M") || c.conn.serial.startsWith("03W")))
     mergeTemp("chamber_temper", s.chamber);
@@ -852,6 +864,8 @@ void applyAgent(Slot& slot, JsonObjectConst o, const char* pcId, const char* pcN
   s.chamber = agentNumber(o["ch"]);
   s.door = constrain(o["door"] | -1, -1, 1);
   s.light = constrain(o["light"] | -1, -1, 1);
+  for (int i = 0; i < 3; i++) s.fan[i] = (int8_t)constrain(o["fan"][i] | -1, -1, 100);
+  s.duct = (int8_t)constrain(o["duct"] | -1, -1, 100);
 
   s.amsCount = 0;
   for (JsonObjectConst u : o["ams"].as<JsonArrayConst>()) {

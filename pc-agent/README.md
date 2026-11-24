@@ -175,6 +175,29 @@ Like the Work app's data, the deck takes a sheet only from a PC whose agent
 `POST /api/pc/bench/image?pc_id=&title=` (multipart `image`, a baseline JPEG up
 to 400 KB) and `GET /api/pc/bench` (the current sheet).
 
+### A plan on the bench, followed live (td_plan.py)
+
+The checklist of a plan under a repo's `PLANS/` (a `## Progreso` or
+`## Progress` section of `- [ ]` / `- [~]` / `- [x]` items, grouped by `###`),
+on the deck instead of in a terminal pane. Pin it from the repo:
+
+```
+python touchdeck_agent.py plan              # the newest plan in this repo's PLANS/
+python touchdeck_agent.py plan funding      # the newest one whose file name has "funding"
+python touchdeck_agent.py plan off          # stop following it
+```
+
+The running agent checks the pin (`~/.touchdeck/plan.json`) and the plan's
+mtime every 3 s and sends the checklist to the Bench app when it changes:
+pinning opens the app, later updates redraw it in place. The sheet is
+read-only and opens on the whole checklist: its groups, done steps ticked and
+struck through, the one in progress (`[~]`) in amber, the ones left with an
+empty ring, scrolled to where the plan is, and how many are done. A tap
+switches to the current step alone (the first `[~]`, else the first `[ ]`,
+large, with the one before and the next ones) and back; nothing moves a step. Whoever
+implements the plan (any session, any LLM) ticks the file and the deck follows.
+`POST /api/pc/bench` takes `"plan": true` and `"quiet": true` for this.
+
 ## Work app: GitLab and Jira (td_work.py)
 
 The Work app on the deck has two tabs.
@@ -227,6 +250,21 @@ applies at once, no restart.
   is never sent to a server it wasn't typed for.
 - It only answers requests for `127.0.0.1:4213` / `localhost:4213` that carry
   the page's per-run session value, so other web pages can't read or change it.
+
+### Branches tab: local branches, on demand
+
+When `~/.claude/briefing/branches.py` exists (or `work.json` names another
+script in `"branches": {"script": ...}`; `"enabled": false` turns it off), the
+Work app gets a third tab with the local branches of the repos under `~/code`
+as that script classifies them: Keep, Review and Delete, each branch with its
+state (active, parked, blocked, stale, merged), repo, MR and reason. A tap on a
+branch opens its MR here.
+
+A scan runs git in every repo and asks GitLab for the MRs (~5-15 s), so it never
+runs on a timer: the deck asks for one (signed `branches_scan`, so the PC must
+be paired) when the tab opens with no scan or one older than 10 minutes, and on
+its **Scan** button. The last scan keeps being pushed with the rest of the Work
+data until the next one.
 
 ### The settings page (td_portal.py, portal/)
 
@@ -328,7 +366,8 @@ printer on the deck's portal picker.
 
 The agent runs on a Mac too: metrics (psutil, no GPU), Claude Code (if you add
 the hooks there), the Work app, Now playing with its cover and buttons, and
-the deck's commands once paired, Keep awake. Volume is Windows-only for now. The Mac and
+the deck's commands once paired, Keep awake, and the volume (output level and mute, through
+`osascript`; an output with no volume of its own, as some HDMI ones, shows none). The Mac and
 the deck must be on the same network.
 
 **As a service** (starts at login, restarts if it stops):
@@ -418,7 +457,7 @@ in the same folder are read too.)
   password, no permission prompt, no extra packages (sips, part of macOS,
   resizes the cover).
 - **Cover**: served on TCP 4211, `GET /art?id=<crc32>&s=<px>`, raw RGB565.
-- **Volume**: master volume and mute in `pcstate` (pycaw).
+- **Volume**: master volume and mute in `pcstate` (Windows: pycaw; macOS: `osascript`).
 - **Commands** (the tile's buttons, PC volume): UDP 4212, signed with the key
   from pairing. Only media, volume, Keep awake and the Work app's links run;
   lock, sleep, restart, shutdown and hotkeys are refused.

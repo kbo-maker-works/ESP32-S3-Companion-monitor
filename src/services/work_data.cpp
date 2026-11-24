@@ -5,7 +5,7 @@
 
 namespace {
 
-// ~6 KB: in PSRAM, allocated by the first push. Until then the empty one (flash).
+// ~10 KB: in PSRAM, allocated by the first push. Until then the empty one (flash).
 WorkData* s_work = nullptr;
 const WorkData kEmpty = {};
 
@@ -34,6 +34,10 @@ const char* const kSectionNames[WORK_SECTIONS] = {
 
 }  // namespace
 
+const char* const kVerdictNames[WORK_BR_VERDICTS] = {"Keep", "Review", "Delete"};
+
+const char* workVerdictName(int v) { return v >= 0 && v < WORK_BR_VERDICTS ? kVerdictNames[v] : ""; }
+
 const char* workSectionName(int sec) { return sec >= 0 && sec < WORK_SECTIONS ? kSectionNames[sec] : ""; }
 
 const WorkData& workData() { return s_work ? *s_work : kEmpty; }
@@ -43,7 +47,7 @@ bool workFresh() { return s_work && s_work->rxMs && millis() - s_work->rxMs < WO
 int workPipelinesKo() { return workFresh() && s_work->gitlab ? s_work->ko : 0; }
 
 bool workApply(const String& json, IPAddress from, String& err) {
-  JsonDocument doc(psramJson());  // up to 16 KB of rows: keep it out of internal RAM
+  JsonDocument doc(psramJson());  // up to 24 KB of rows: keep it out of internal RAM
   if (deserializeJson(doc, json)) {
     err = "bad JSON";
     return false;
@@ -134,6 +138,34 @@ bool workApply(const String& json, IPAddress from, String& err) {
     }
   }
 
+  JsonObjectConst br = doc["branches"];
+  if ((w->branches = !br.isNull())) {
+    w->brScanning = br["scanning"] | false;
+    copy(w->brErr, sizeof(w->brErr), br["err"]);
+    w->brAt = br["at"] | 0;
+    int i = 0;
+    for (JsonVariantConst n : br["n"].as<JsonArrayConst>())
+      if (i < WORK_BR_VERDICTS) w->brN[i++] = n | 0;
+    // [verdict, state, tone, repo, branch, ticket, mr, reason, age, current, link]
+    for (JsonArrayConst r : br["rows"].as<JsonArrayConst>()) {
+      if (w->brCount >= WORK_MAX_BRANCHES) break;
+      const char* v = r[0] | "k";
+      const uint8_t verdict = v[0] == 'd' ? WORK_BR_DELETE : v[0] == 'r' ? WORK_BR_REVIEW : WORK_BR_KEEP;
+      WorkBranch& b = w->br[w->brCount++];
+      b.verdict = verdict;
+      copy(b.state, sizeof(b.state), r[1]);
+      b.tone = tone(r[2] | "");
+      copy(b.repo, sizeof(b.repo), r[3]);
+      copy(b.name, sizeof(b.name), r[4]);
+      copy(b.ticket, sizeof(b.ticket), r[5]);
+      copy(b.mr, sizeof(b.mr), r[6]);
+      copy(b.reason, sizeof(b.reason), r[7]);
+      copy(b.age, sizeof(b.age), r[8]);
+      b.current = (r[9] | 0) != 0;
+      copy(b.link, sizeof(b.link), r[10]);
+    }
+  }
+
   // Same content as before: only the time moves (the agent repeats it every minute).
   w->seq = s_work->seq;
   w->rxMs = s_work->rxMs;
@@ -152,4 +184,12 @@ bool workOpen(const char* link, String& err) {
   char cmd[24];
   snprintf(cmd, sizeof(cmd), "open:%s", link);
   return pcSendCommand(s_work->pcId, cmd, err);
+}
+
+bool workScanBranches(String& err) {
+  if (!s_work || !s_work->pcId[0] || !s_work->branches) {
+    err = "no branches on this PC's agent";
+    return false;
+  }
+  return pcSendCommand(s_work->pcId, "branches_scan", err);
 }

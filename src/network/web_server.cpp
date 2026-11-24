@@ -2531,8 +2531,8 @@ static void handlePcStatus() {
 static void handlePcWork() {
   const String& body = server.arg("plain");
   String err;
-  if (!body.length() || body.length() > 16384) {
-    sendJsonMessage(400, false, "Expected a JSON body up to 16 KB");
+  if (!body.length() || body.length() > 24576) {  // rows of GitLab, Jira and the branches
+    sendJsonMessage(400, false, "Expected a JSON body up to 24 KB");
     return;
   }
   if (!workApply(body, server.client().remoteIP(), err)) {
@@ -2572,7 +2572,9 @@ static bool benchFromKnownPc(const String& id) {
   return pc && (pc->ip == server.client().remoteIP() || pc->viaSerial);
 }
 
-// POST /api/pc/bench {"pc_id", "title", "text"}: a text sheet, one step per line.
+// POST /api/pc/bench {"pc_id", "title", "text"[, "plan", "quiet"]}: a text sheet,
+// one step per line; "plan": read-only, its checkboxes say where it is (td_plan.py);
+// "quiet": don't open the app for it.
 static void handlePcBench() {
   const String& body = server.arg("plain");
   if (!body.length() || body.length() > BENCH_MAX_TEXT + 1024) {
@@ -2589,7 +2591,7 @@ static void handlePcBench() {
     return;
   }
   String err;
-  if (!benchPushText(doc["title"] | "", doc["text"] | "", err)) {
+  if (!benchPushText(doc["title"] | "", doc["text"] | "", err, doc["plan"] | false, doc["quiet"] | false)) {
     sendJsonMessage(400, false, err.c_str());
     return;
   }

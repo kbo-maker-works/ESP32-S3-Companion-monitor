@@ -22,8 +22,10 @@ constexpr int BENCH_MAX_SIDE = 1280;         // pixels, either side
 constexpr uint32_t BENCH_MAX_PIXELS = 800 * 600;  // decoded only while zoomed: ~940 KB of PSRAM
 
 // A text sheet ("" title = none). False with the reason when it does not fit
-// or cannot be stored.
-bool benchPushText(const char* title, const char* text, String& err);
+// or cannot be stored. plan: a read-only plan whose "[x]" / "[~]" / "[ ]" marks
+// say where it is (pc-agent/td_plan.py); quiet: don't open the app for it (an
+// update of the plan on show redraws in place).
+bool benchPushText(const char* title, const char* text, String& err, bool plan = false, bool quiet = false);
 // The web server writes an uploaded JPEG here, then calls benchPushImage,
 // which checks it (baseline JPEG within the limits) and makes it the sheet.
 String benchUploadPath();

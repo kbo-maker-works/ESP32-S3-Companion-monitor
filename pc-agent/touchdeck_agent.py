@@ -615,6 +615,7 @@ class PcSide:
                 print("media off: %s" % e, flush=True)
                 self.media = None
         elif sys.platform == "darwin":  # Now playing through Apple's python3 (td_media_mac.py)
+            self.volume = td_pc.MacVolume()  # output volume and mute (osascript)
             try:
                 import td_media_mac
                 py = td_media_mac.apple_python()
@@ -692,6 +693,18 @@ def start_bambu(target, pc_id, pc_name, verbose):
         return cloud
     except Exception as e:  # no paho-mqtt, a bad bambu.json: the rest goes on
         print("bambu off: %s" % e, flush=True)
+        return None
+
+
+def start_plan(target, pc_id, verbose):
+    """The pinned plan on the Bench app (td_plan.py, pinned with "touchdeck_agent.py plan")."""
+    try:
+        import td_plan
+        watch = td_plan.PlanWatch(target.get, pc_id, verbose)
+        watch.start()
+        return watch
+    except Exception as e:
+        print("plan off: %s" % e, flush=True)
         return None
 
 
@@ -843,9 +856,11 @@ def packet_bytes(pkt):
 
 def main():
     ap = argparse.ArgumentParser(description="CompaDeck PC agent")
-    ap.add_argument("mode", nargs="?", default="run", choices=["run", "hook", "pair", "settings"],
+    ap.add_argument("mode", nargs="?", default="run", choices=["run", "hook", "pair", "settings", "plan"],
                     help="run (default), hook (Claude Code), pair (get the key for PC control), "
-                         "settings (open the settings page of the running agent)")
+                         "settings (open the settings page of the running agent), "
+                         "plan [file|name|off] (pin a PLANS/ plan: the Bench app follows it, td_plan.py)")
+    ap.add_argument("target", nargs="?", default="", help="plan: the plan file or part of its name, off to unpin")
     ap.add_argument("--host", default=os.environ.get("TOUCHDECK_HOST", "companion.local"),
                     help="deck name or IP (default companion.local, env TOUCHDECK_HOST)")
     ap.add_argument("--once", action="store_true", help="build and print one packet, send nothing")
@@ -861,6 +876,11 @@ def main():
             run_hook()
         except Exception:  # a hook must never get in Claude Code's way
             pass
+        return
+
+    if args.mode == "plan":  # the running agent sees the pin within seconds
+        import td_plan
+        print(td_plan.pin_plan(args.target, os.getcwd()))
         return
 
     if args.mode == "settings":
@@ -896,6 +916,7 @@ def main():
     target = Target(args.host)
     print("CompaDeck agent: %s -> %s:%d" % (pc_name, args.host, DECK_PORT), flush=True)
     worker = start_work(target, pc_id, pc_name, args.verbose)
+    start_plan(target, pc_id, args.verbose)
     awake = start_awake()
     bambu = start_bambu(target, pc_id, pc_name, args.verbose)
     portal = start_portal(args.portal_port, worker, args.host, target, pc_name, awake, bambu)
@@ -904,6 +925,7 @@ def main():
     handlers = {}
     if worker:
         handlers["open:"] = worker.open_link
+        handlers["branches_scan"] = worker.scan_branches  # the Work app's Branches tab
     if awake:
         handlers["awake_toggle"] = awake.command
     # The deck's Settings app: this agent's settings page, the deck's own portal.

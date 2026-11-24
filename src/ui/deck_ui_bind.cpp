@@ -110,6 +110,7 @@ void pcCmdSync() {
   PcCmdResult o;
   while (pcTakeCmdResult(o)) {
     if (o.ok && o.cmd.startsWith("volume_set:")) continue;  // the slider is the feedback
+    if (o.ok && o.cmd == "branches_scan") continue;         // the Branches tab says "scanning"
     const String t = o.pcName + ": " + pcCmdLabel(o.cmd) + (o.ok ? "" : String(" - ") + (o.msg.length() ? o.msg : "failed"));
     deckToastShow(t.c_str(), o.ok ? 1200 : 2500);
   }
@@ -121,10 +122,11 @@ bool s_prnRebuild = false;
 String s_keepPage;  // buildPages: show this page again (set by rebuildPages)
 
 // "when" tiles. A PC counts as off only after this long offline, on top of
-// PC_STALE_TIMEOUT_MS, so a companion restart does not reshuffle the page.
+// PC_STALE_TIMEOUT_MS, so a companion restart does not reshuffle the page. A
+// printer ("printer-on") rides the same list as "prn:<id>", with the same grace.
 constexpr uint32_t WHEN_PC_GRACE_MS = 45000;
 struct WhenPc {
-  String id;  // "" = the first known PC
+  String id;  // "" = the first known PC; "prn:<id>" = a printer
   bool on = false;
   uint32_t offSince = 0;
 };
@@ -137,8 +139,23 @@ bool pcIsOnline(const String& id) {
   return src && src->data.online;
 }
 
+// What a condition watches: its PC, or "prn:<id>" for its printer.
+String whenKey(const WhenDef& w, const String& pcId) {
+  return w.kind == WHEN_PRINTER_ON ? "prn:" + w.printer : pcId;
+}
+
+bool whenOnline(const String& key) {
+  return key.startsWith("prn:") ? printerOnlineNow(key.substring(4)) : pcIsOnline(key);
+}
+
 // pcId: the PC a pc-on / pc-off condition follows ("" = the first known one).
 bool whenWanted(const WhenDef& w, const String& pcId) {
+  if (w.kind == WHEN_PRINTER_ON) {
+    const String key = whenKey(w, pcId);
+    for (const WhenPc& p : s_whenPcs)
+      if (p.id == key) return p.on;
+    return false;
+  }
   if (w.kind == WHEN_PC_ON || w.kind == WHEN_PC_OFF) {
     bool on = false;
     for (const WhenPc& p : s_whenPcs)
@@ -149,17 +166,32 @@ bool whenWanted(const WhenDef& w, const String& pcId) {
 }
 
 bool whenWanted(const TileDef& t) { return whenWanted(t.when, tilePcId(t)); }
-bool whenWanted(const PageDef& p) { return whenWanted(p.when, String()); }
+
+// A printer page ("printer") is up only while its printer is on and reporting,
+// as its "when" were "printer-on" too (a cloud printer is always "powered").
+WhenDef printerWhen(const PageDef& p) {
+  WhenDef w;
+  if (p.printer.length()) {
+    w.kind = WHEN_PRINTER_ON;
+    w.printer = p.printer;
+  }
+  return w;
+}
+
+bool whenWanted(const PageDef& p) {
+  return whenWanted(p.when, String()) && whenWanted(printerWhen(p), String());
+}
 
 void whenWatch(const WhenDef& w, const String& pcId, std::vector<WhenPc>& pcs) {
   if (w.kind != WHEN_ALWAYS) {
+    const String key = whenKey(w, pcId);
     for (const WhenPc& p : pcs)
-      if (p.id == pcId) return;
+      if (p.id == key) return;
     WhenPc n;
-    n.id = pcId;
-    n.on = pcIsOnline(pcId);
+    n.id = key;
+    n.on = whenOnline(key);
     for (const WhenPc& p : s_whenPcs)
-      if (p.id == pcId) n = p;
+      if (p.id == key) n = p;
     pcs.push_back(n);
   }
 }
@@ -169,6 +201,7 @@ void whenCollect() {
   std::vector<WhenPc> pcs;
   for (const PageDef& pd : s_cfg.pages) {
     whenWatch(pd.when, String(), pcs);
+    whenWatch(printerWhen(pd), String(), pcs);
     for (const TileDef& t : pd.tiles) whenWatch(t.when, tilePcId(t), pcs);
   }
   s_whenPcs.swap(pcs);
@@ -177,7 +210,7 @@ void whenCollect() {
 void whenTrack() {
   const uint32_t now = millis();
   for (WhenPc& p : s_whenPcs) {
-    if (pcIsOnline(p.id)) {
+    if (whenOnline(p.id)) {
       p.on = true;
       p.offSince = 0;
     } else if (p.on) {
@@ -357,6 +390,7 @@ const char* pcCmdLabel(const String& cmd) {
   if (cmd.startsWith("open:")) return "Opening in the browser";
   if (cmd == "open_deck") return "Opening the deck's portal";
   if (cmd == "open_agent") return "Opening the agent's settings";
+  if (cmd == "branches_scan") return "Scanning branches";
   if (cmd.startsWith("claude:")) return "Answer for Claude";
   return "Run";
 }

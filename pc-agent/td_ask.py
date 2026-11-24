@@ -114,6 +114,21 @@ def tool_text(name, ti):
     return json.dumps(ti, ensure_ascii=False, separators=(",", ":")), ""
 
 
+def suggestions_for(payload):
+    """What "Always" saves. Claude Code sends no suggestions for MCP tools, yet the
+    terminal offers "Always allow" for them, which allows that one tool in the
+    project's local settings: the same rule here. Other tools without suggestions
+    get no "Always" (a whole-tool rule for Bash would allow every command)."""
+    s = payload.get("permission_suggestions")
+    if isinstance(s, list) and s:
+        return s
+    name = payload.get("tool_name") or ""
+    if name.startswith("mcp__"):
+        return [{"type": "addRules", "rules": [{"toolName": name}], "behavior": "allow",
+                 "destination": "localSettings"}]
+    return []
+
+
 def always_hint(suggestions):
     """What 'Always' does, as the terminal words its option."""
     where = {"session": "this session", "localSettings": "this project", "projectSettings": "this project",
@@ -131,6 +146,8 @@ def always_hint(suggestions):
             for r in s.get("rules") or []:
                 if isinstance(r, dict):
                     tool, content = r.get("toolName") or "", r.get("ruleContent") or ""
+                    if tool.startswith("mcp__") and not content:  # "addOrEditJiraIssueComment (atlassian)"
+                        tool = tool_title(tool)
                     rules.append("%s(%s)" % (tool, content) if content else tool)
             if rules:
                 return "Always: %s%s" % (", ".join(rules), " in " + dest if dest else "")
@@ -167,8 +184,7 @@ def build_prompt(payload, session):
         if not questions:
             return None
         return dict(base, kind="q", questions=questions)
-    suggestions = payload.get("permission_suggestions")
-    suggestions = suggestions if isinstance(suggestions, list) else []
+    suggestions = suggestions_for(payload)
     text, desc = tool_text(name, ti)
     # Shown left to right; the last one is the deck's accent button.
     actions = ["deny", "always", "allow"] if suggestions else ["deny", "allow"]
@@ -270,7 +286,7 @@ def decision_for(answer, payload):
     if action == "allow":
         return {"behavior": "allow"}
     if action == "always":
-        return {"behavior": "allow", "updatedPermissions": payload.get("permission_suggestions") or []}
+        return {"behavior": "allow", "updatedPermissions": suggestions_for(payload)}
     if action == "deny":
         # As the terminal's No: Claude stops and waits for you.
         return {"behavior": "deny", "message": DENY_MESSAGE, "interrupt": True}

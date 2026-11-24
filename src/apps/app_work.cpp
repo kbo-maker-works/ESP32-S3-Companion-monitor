@@ -11,11 +11,16 @@
 // a pool. Once a second the age line moves. A tile's widget can ask for a tab
 // and section before opening the app (workFocus).
 //
-// A tap on a row (an MR, a pipeline, a ticket) asks the agent's PC to open its
-// page in the browser, like a Stream Deck key (workOpen).
+// Branches lists the PC's local branches as branches.py classifies them (keep,
+// review, delete). The agent scans only when asked: opening the tab with no
+// scan or one older than BR_STALE_S asks for one, and so does its refresh button.
+//
+// A tap on a row (an MR, a pipeline, a ticket, a branch's MR) asks the agent's
+// PC to open its page in the browser, like a Stream Deck key (workOpen).
 #include "apps/app_work.h"
 #include "ui/deck_ui_int.h"
 #include "services/work_data.h"
+#include <time.h>
 
 namespace app {
 namespace {
@@ -25,28 +30,37 @@ using namespace deckui;
 constexpr uint32_t C_RUNNING = 0x60A5FA;
 constexpr int GL_PIPES = WORK_SECTIONS;  // the pipelines section, after the MR ones
 constexpr int GL_GROUPS = WORK_SECTIONS + 1;
+constexpr int TABS = 3;           // GitLab, Jira, Branches
+constexpr int TAB_BRANCHES = 2;
+constexpr uint32_t BR_STALE_S = 10 * 60;  // opening the tab rescans a scan older than this
+constexpr uint32_t BR_ASK_GAP_MS = 60000;  // ...but asks by itself at most this often
 
 struct Section { lv_obj_t *head, *arrow, *dot, *title, *count, *body; };
 struct MrRow { lv_obj_t *box, *chip, *title, *ref, *add, *del, *pipe, *threads, *age; };
 struct PipeRow { lv_obj_t *box, *dot, *ref, *info; };
 struct TicketRow { lv_obj_t *box, *key, *title, *status; };
+struct BranchRow { lv_obj_t *box, *chip, *name, *age, *meta, *reason; };
 
 struct Ui {
-  lv_obj_t *tab[2], *badge[2], *pane[2], *age, *empty, *pool;
+  lv_obj_t *tab[TABS], *badge[TABS], *pane[TABS], *age, *empty, *pool;
   lv_obj_t *summary, *glErr, *excluded, *jiraErr, *jiraNone;
+  lv_obj_t *brSummary, *brRefresh, *brErr, *brNone;
   Section gl[GL_GROUPS];
   Section jira[WORK_MAX_COLS];
+  Section brs[WORK_BR_VERDICTS];
   MrRow mrs[WORK_MAX_MRS];
   PipeRow pipes[WORK_MAX_PIPELINES];
   TicketRow tickets[WORK_MAX_TICKETS];
+  BranchRow branches[WORK_MAX_BRANCHES];
   int active;
+  uint32_t scanAskedMs;  // millis() of the last scan asked by itself, 0 = none
   uint32_t seq, ageAt;
 };
 Ui* s = nullptr;
 
 // Folded or not, per section, for the whole session: 0 = by default (open
 // when it has something), 1 = open, 2 = folded.
-uint8_t s_fold[2][GL_GROUPS] = {};
+uint8_t s_fold[TABS][GL_GROUPS] = {};
 int s_focusTab = -1, s_focusSection = -1;
 
 lv_obj_t* plain(lv_obj_t* parent) {
@@ -171,7 +185,7 @@ void onHead(lv_event_t* e) {
   if (!s) return;
   const uintptr_t d = (uintptr_t)lv_event_get_user_data(e);
   const int tab = d >> 8, i = d & 0xFF;
-  Section& sec = tab ? s->jira[i] : s->gl[i];
+  Section& sec = tab == TAB_BRANCHES ? s->brs[i] : tab ? s->jira[i] : s->gl[i];
   hapticTap();
   s_fold[tab][i] = lv_obj_has_flag(sec.body, LV_OBJ_FLAG_HIDDEN) ? 1 : 2;
   applyFold(tab, i, sec, true);
@@ -221,7 +235,7 @@ lv_obj_t* pane(lv_obj_t* parent) {
 
 // --- Rows ---------------------------------------------------------------------
 
-enum RowKind : uintptr_t { ROW_MR, ROW_PIPE, ROW_TICKET };
+enum RowKind : uintptr_t { ROW_MR, ROW_PIPE, ROW_TICKET, ROW_BRANCH };
 
 // The row at this index now (rows are refilled in place on each push).
 void onRow(lv_event_t* e) {
@@ -231,10 +245,13 @@ void onRow(lv_event_t* e) {
   const WorkData& w = workData();
   const char* link = kind == ROW_MR       ? (i < w.mrCount ? w.mrs[i].link : "")
                      : kind == ROW_PIPE   ? (i < w.pipelineCount ? w.pipelines[i].link : "")
-                                          : (i < w.ticketCount ? w.tickets[i].link : "");
+                     : kind == ROW_TICKET ? (i < w.ticketCount ? w.tickets[i].link : "")
+                                          : (i < w.brCount ? w.br[i].link : "");
   hapticTap();
   String err;
-  if (!workOpen(link, err)) deckToastShow(err.c_str(), 2500);  // done: the command's own toast
+  if (kind == ROW_BRANCH && !link[0]) err = "No MR for this branch";
+  else if (workOpen(link, err)) return;  // done: the command's own toast
+  deckToastShow(err.c_str(), 2500);
 }
 
 void tappable(lv_obj_t* box, RowKind kind, int i) {
@@ -293,17 +310,39 @@ void buildTicket(TicketRow& r, int i) {
   r.status = chip(r.box);
 }
 
+// Three lines: [state] branch  age / repo · MR or ticket / why (branches.py's reason)
+void buildBranch(BranchRow& r, int i) {
+  r.box = card(s->pool);
+  tappable(r.box, ROW_BRANCH, i);
+  lv_obj_set_size(r.box, LV_PCT(100), LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(r.box, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_hor(r.box, 8, 0);
+  lv_obj_set_style_pad_ver(r.box, 5, 0);
+  lv_obj_set_style_pad_row(r.box, 2, 0);
+  lv_obj_t* top = flexRow(r.box, 6);
+  r.chip = chip(top);
+  r.name = line(top, &deck_font_14, C_TEXT);
+  r.age = text(top, &deck_font_12, C_DIM);
+  lv_obj_t* meta = flexRow(r.box, 6);
+  r.meta = line(meta, &deck_font_12, C_DIM);
+  lv_obj_t* why = flexRow(r.box, 6);
+  r.reason = line(why, &deck_font_12, C_DIM);
+}
+
 // --- Tabs ---------------------------------------------------------------------
+
+void maybeScan();
 
 void showTab(int t) {
   s->active = t;
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < TABS; i++) {
     const bool on = i == t;
     showObj(s->pane[i], on);
     lv_obj_set_style_bg_opa(s->tab[i], on ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s->tab[i], on ? 2 : 0, 0);
     lv_obj_set_style_text_color(lv_obj_get_child(s->tab[i], 0), lv_color_hex(on ? C_TEXT : C_DIM), 0);
   }
+  if (t == TAB_BRANCHES) maybeScan();
 }
 
 void onTab(lv_event_t* e) {
@@ -420,12 +459,109 @@ void refreshJira(const WorkData& w) {
   setBadge(s->badge[1], w.colCount > 1 ? w.cols[1].n : 0, 0x1F6FEB);  // the second filter: "in progress"
 }
 
+// "3m ago" from an epoch time; "" while the clock is not set.
+void agoText(char* b, size_t n, uint32_t at) {
+  const time_t now = time(nullptr);
+  b[0] = 0;
+  if (!at || now < 1700000000 || (uint32_t)now < at) return;
+  const uint32_t d = (uint32_t)now - at;
+  if (d < 60) snprintf(b, n, "just now");
+  else if (d < 3600) snprintf(b, n, "%um ago", (unsigned)(d / 60));
+  else if (d < 86400) snprintf(b, n, "%uh ago", (unsigned)(d / 3600));
+  else snprintf(b, n, "%ud ago", (unsigned)(d / 86400));
+}
+
+void refreshBranchSummary(const WorkData& w) {
+  char b[64], ago[16];
+  agoText(ago, sizeof(ago), w.brAt);
+  if (w.brScanning) snprintf(b, sizeof(b), "Scanning the repos...");
+  else if (!w.brAt) snprintf(b, sizeof(b), "Not scanned yet");
+  else snprintf(b, sizeof(b), "%d branches%s%s", w.brN[0] + w.brN[1] + w.brN[2], ago[0] ? "  ·  scanned " : "", ago);
+  setText(s->brSummary, b);
+  lv_obj_set_style_text_color(s->brSummary, lv_color_hex(w.brScanning ? C_RUNNING : C_DIM), 0);
+  lv_obj_set_style_opa(s->brRefresh, w.brScanning ? LV_OPA_40 : LV_OPA_COVER, 0);
+}
+
+void refreshBranches(const WorkData& w) {
+  char b[80];
+  refreshBranchSummary(w);
+  showObj(s->brErr, w.brErr[0]);
+  setText(s->brErr, w.brErr);
+  showObj(s->brNone, w.brAt && !w.brCount && !w.brScanning);
+  for (int v = 0; v < WORK_BR_VERDICTS; v++) {
+    Section& sec = s->brs[v];
+    showObj(sec.head, w.brAt);
+    if (!w.brAt) {
+      showObj(sec.body, false);
+      continue;
+    }
+    setText(sec.title, workVerdictName(v));
+    setNumber(sec.count, w.brN[v]);
+    lv_obj_set_style_bg_color(sec.dot, lv_color_hex(v == WORK_BR_KEEP ? C_OK : v == WORK_BR_REVIEW ? C_WARN : C_DIM), 0);
+    applyFold(TAB_BRANCHES, v, sec, w.brN[v] > 0);
+  }
+  for (int i = 0; i < WORK_MAX_BRANCHES; i++) {
+    BranchRow& r = s->branches[i];
+    if (i >= w.brCount) {
+      lv_obj_set_parent(r.box, s->pool);
+      continue;
+    }
+    const WorkBranch& br = w.br[i];
+    lv_obj_set_parent(r.box, s->brs[br.verdict < WORK_BR_VERDICTS ? br.verdict : 0].body);
+    lv_obj_move_foreground(r.box);
+    setChip(r.chip, br.state, toneColor(br.tone));
+    setText(r.name, br.name);
+    lv_obj_set_style_text_color(r.name, lv_color_hex(br.current ? C_ACCENT : C_TEXT), 0);
+    setText(r.age, br.age);
+    if (br.mr[0]) snprintf(b, sizeof(b), "%s  ·  %s", br.repo, br.mr);
+    else if (br.ticket[0]) snprintf(b, sizeof(b), "%s  ·  %s  ·  no MR", br.repo, br.ticket);
+    else snprintf(b, sizeof(b), "%s  ·  no MR", br.repo);
+    setText(r.meta, b);
+    setText(r.reason, br.reason);
+  }
+  showObj(s->tab[TAB_BRANCHES], w.branches);
+  setBadge(s->badge[TAB_BRANCHES], w.brN[WORK_BR_REVIEW], 0xD29922);  // the ones to look at
+}
+
 void refresh() {
   const WorkData& w = workData();
   showObj(s->empty, !w.rxMs);
   s->seq = w.seq;
   refreshGitlab(w);
   refreshJira(w);
+  refreshBranches(w);
+  if (s->active == TAB_BRANCHES && !w.branches) showTab(0);
+}
+
+// Asks the agent for a scan; by itself at most every BR_ASK_GAP_MS (fromButton: always).
+void requestScan(bool fromButton) {
+  const WorkData& w = workData();
+  if (!w.branches || w.brScanning) return;
+  if (!fromButton && s->scanAskedMs && millis() - s->scanAskedMs < BR_ASK_GAP_MS) return;
+  s->scanAskedMs = millis() | 1;
+  String err;
+  if (!workScanBranches(err)) {
+    if (fromButton) deckToastShow(err.c_str(), 2500);
+    return;
+  }
+  // Until the agent's push says so, show it here.
+  setText(s->brSummary, "Scanning the repos...");
+  lv_obj_set_style_text_color(s->brSummary, lv_color_hex(C_RUNNING), 0);
+}
+
+// The tab is shown: scan when there is no scan yet or it is old.
+void maybeScan() {
+  const WorkData& w = workData();
+  if (!w.branches) return;
+  const time_t now = time(nullptr);
+  const bool old = now > 1700000000 && (uint32_t)now > w.brAt && (uint32_t)now - w.brAt > BR_STALE_S;
+  if (!w.brAt || old) requestScan(false);
+}
+
+void onRefresh(lv_event_t*) {
+  if (!s) return;
+  hapticTap();
+  requestScan(true);
 }
 
 // Nothing while the data is current (the top bar's PC icon says the agent is
@@ -435,6 +571,7 @@ void refreshAge() {
   char b[40] = "";
   if (w.rxMs && !workFresh()) snprintf(b, sizeof(b), "updated %um ago", (unsigned)((millis() - w.rxMs) / 60000));
   setText(s->age, b);
+  if (w.branches) refreshBranchSummary(w);  // "scanned 3m ago" moves
 }
 
 // A tile asked for a tab and a section: open that section and bring it up.
@@ -444,7 +581,9 @@ void applyFocus() {
   s_focusTab = s_focusSection = -1;
   showTab(tab);
   if (sec < 0) return;
-  Section* target = tab ? (sec < WORK_MAX_COLS ? &s->jira[sec] : nullptr) : (sec < GL_GROUPS ? &s->gl[sec] : nullptr);
+  Section* target = tab == TAB_BRANCHES ? (sec < WORK_BR_VERDICTS ? &s->brs[sec] : nullptr)
+                    : tab                ? (sec < WORK_MAX_COLS ? &s->jira[sec] : nullptr)
+                                         : (sec < GL_GROUPS ? &s->gl[sec] : nullptr);
   if (!target) return;
   s_fold[tab][sec] = 1;
   showObj(target->body, true);
@@ -470,12 +609,12 @@ void open(lv_obj_t* body, int w, int h) {
   lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_BOTTOM, 0);
   lv_obj_set_style_border_width(bar, 1, 0);
   lv_obj_set_style_border_color(bar, lv_color_hex(C_TILE_LINE), 0);
-  static const char* const kTabs[2] = {"GitLab", "Jira"};
-  for (int i = 0; i < 2; i++) {
+  static const char* const kTabs[TABS] = {"GitLab", "Jira", "Branches"};
+  for (int i = 0; i < TABS; i++) {
     lv_obj_t* t = plain(bar);
     s->tab[i] = t;
     lv_obj_add_flag(t, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_size(t, 104, 30);
+    lv_obj_set_size(t, i == TAB_BRANCHES ? 116 : 96, 30);
     lv_obj_set_flex_flow(t, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(t, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(t, 6, 0);
@@ -521,6 +660,22 @@ void open(lv_obj_t* body, int w, int h) {
   for (int i = 0; i < WORK_MAX_COLS; i++) buildSection(jp, s->jira[i], 1, i, true);
   for (int i = 0; i < WORK_MAX_TICKETS; i++) buildTicket(s->tickets[i], i);
 
+  // Branches: summary and refresh button, then keep / review / delete
+  lv_obj_t* bp = s->pane[TAB_BRANCHES] = pane(root);
+  lv_obj_t* head = flexRow(bp, 8);
+  s->brSummary = line(head, &deck_font_12, C_DIM);
+  s->brRefresh = card(head);
+  lv_obj_add_flag(s->brRefresh, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_size(s->brRefresh, 88, 26);
+  lv_obj_set_style_bg_color(s->brRefresh, lv_color_hex(C_TILE_LINE), LV_STATE_PRESSED);
+  lv_obj_t* rl = text(s->brRefresh, &deck_font_12, C_TEXT, LV_SYMBOL_REFRESH " Scan");
+  lv_obj_center(rl);
+  lv_obj_add_event_cb(s->brRefresh, onRefresh, LV_EVENT_SHORT_CLICKED, nullptr);
+  s->brErr = errorLine(bp);
+  s->brNone = text(bp, &deck_font_12, C_DIM, "No local branches besides the base ones");
+  for (int v = 0; v < WORK_BR_VERDICTS; v++) buildSection(bp, s->brs[v], TAB_BRANCHES, v, true);
+  for (int i = 0; i < WORK_MAX_BRANCHES; i++) buildBranch(s->branches[i], i);
+
   // Over everything until the first push
   s->empty = plain(body);
   lv_obj_set_size(s->empty, w, h);
@@ -548,6 +703,7 @@ void tick() {
   if (millis() - s->ageAt >= 1000) {
     s->ageAt = millis();
     refreshAge();
+    if (s->active == TAB_BRANCHES) maybeScan();  // a refused ask, or the tab left open for long
   }
 }
 

@@ -969,7 +969,7 @@ void whenSync() {
   String autoTo;
   bool flip = false;
   for (const PageDef& pd : s_cfg.pages) {
-    if (pd.when.kind == WHEN_ALWAYS || whenWanted(pd) == pd.shown) continue;
+    if ((pd.when.kind == WHEN_ALWAYS && !pd.printer.length()) || whenWanted(pd) == pd.shown) continue;
     if (pd.shown && pd.id == cur) {
       int back = pageIndexOf(s_autoFrom);
       if (back < 0 || back == sh.active) back = homePage();

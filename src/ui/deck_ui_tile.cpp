@@ -106,9 +106,9 @@ void widgetFree(TileRt& r) {
 
 // The view a printer tile shows, as the portal names it.
 const char* printerShowName(PrinterShow s) {
-  static const char* const kNames[PS_SUMMARY + 1] = {"Progress", "Nozzle", "Bed",   "Chamber",   "Filament",
-                                                     "Layer",    "Light",  "AMS",   "All slots", "Summary"};
-  return s <= PS_SUMMARY ? kNames[s] : "Printer";
+  static const char* const kNames[PS_COUNT] = {"Progress", "Nozzle", "Bed",       "Chamber", "Filament", "Layer",
+                                              "Light",    "AMS",    "All slots", "Summary", "Fans"};
+  return s < PS_COUNT ? kNames[s] : "Printer";
 }
 
 String tileLabel(const TileDef& t) {

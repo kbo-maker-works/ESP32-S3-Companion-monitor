@@ -80,6 +80,8 @@ struct PrinterState {
   float chamber = NAN;        // NAN on models without a chamber sensor (P1S)
 
   int8_t light = -1;          // chamber light: -1 unknown, 0 off, 1 on
+  int8_t fan[3] = {-1, -1, -1};  // part cooling, auxiliary, chamber fan in %; -1 = not reported
+  int8_t duct = -1;           // air duct mode (P2S): 0 cooling (outside air in), 1 heating (recirculates), -1 none
 
   // AMS
   uint8_t amsCount = 0;

@@ -7,7 +7,7 @@ CompaDeck agent: the PC side of the deck's Now playing and PC control tiles.
              td_media_mac.MacMedia instead, with the same interface.
   * ArtServer  GET /art?id=<crc32>&s=<px> -> the cover, px x px raw RGB565
              (little-endian), as the deck's Now playing tile fetches it.
-  * Volume   master volume and mute (pycaw).
+  * Volume   master volume and mute (pycaw); MacVolume on macOS (osascript).
   * Commands  signed commands from the deck on UDP: {"pc","cmd","nonce","sig"},
              sig = hex HMAC-SHA256(key, "pc_id|nonce|cmd") over a single-use
              nonce from our latest packet. Answered with {"ack","ok","msg"} to
@@ -226,6 +226,68 @@ class Volume:
         ep.SetMasterVolumeLevelScalar(max(0.0, min(100.0, vol)) / 100.0, None)
         if vol > 0 and ep.GetMute():
             ep.SetMute(0, None)
+        return True
+
+
+class MacVolume:
+    """The Mac's output volume and mute through osascript (Standard Additions),
+    with Volume's interface. read() runs with every metrics packet, so it keeps
+    its answer for a moment; a command reads fresh. An output with no volume of
+    its own (some HDMI / USB devices) reads as None and refuses commands."""
+
+    READ_EVERY_S = 1.5
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.cached, self.at = (None, None), 0.0
+
+    @staticmethod
+    def _osa(script):
+        import subprocess
+        out = subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True, timeout=5)
+        if out.returncode != 0:
+            raise RuntimeError(out.stderr.strip() or "osascript failed")
+        return out.stdout.strip()
+
+    def _get(self):
+        # "62,false"; "missing value,missing value" when the output has no volume
+        vol, muted = (self._osa('set s to get volume settings\n'
+                                'return ((output volume of s) as text) & "," & ((output muted of s) as text)')
+                      .split(",") + [""])[:2]
+        if not vol.strip().isdigit():
+            return None, None
+        return int(vol), muted.strip() == "true"
+
+    def read(self):
+        with self.lock:
+            if time.monotonic() - self.at < self.READ_EVERY_S:
+                return self.cached
+        try:
+            got = self._get()
+        except Exception:
+            got = (None, None)
+        with self.lock:
+            self.cached, self.at = got, time.monotonic()
+        return got
+
+    def command(self, cmd):
+        vol, muted = self._get()
+        if vol is None:
+            return False
+        if cmd == "volume_mute":
+            self._osa("set volume output muted %s" % ("false" if muted else "true"))
+        else:
+            if cmd == "volume_up":
+                vol += VOLUME_STEP
+            elif cmd == "volume_down":
+                vol -= VOLUME_STEP
+            else:  # volume_set:N
+                vol = int(round(float(cmd.split(":", 1)[1])))
+            vol = max(0, min(100, vol))
+            # Like Windows: a level above 0 unmutes.
+            self._osa("set volume output volume %d%s" % (vol, " without output muted" if vol > 0 else ""))
+        with self.lock:
+            self.at = 0.0  # the next packet reads the new level
         return True
 
 

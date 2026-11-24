@@ -188,10 +188,54 @@ struct State {
   bool angry = false;      // red, fists up (F_ANGRY)
   bool dotted = false;      // the bubble shows thinking dots (". .. ...")
   uint32_t sayKey = 0;     // the bubble's last text and style (the label's own text may end in "...")
+  bool thinking = false;   // the title shows a spinner verb (kVerbs)
+  uint16_t verb = 0;       // which one
+  uint32_t verbAt = 0;     // and since when
 };
 
 // What it says when a tool fails: comic swearing, a new one every 450 ms.
 const char* const kCurses[] = {"#@$%&!", "%&#@!!", "@#$%!*", "&%$#@!", "*#@&%!", "$%@#!!"};
+// While Claude thinks the title says one of Claude Code's spinner verbs, like the
+// terminal does: a new random one each time it starts thinking and every kVerbMs.
+const char* const kVerbs[] = {
+    "Accomplishing...", "Actioning...", "Actualizing...", "Architecting...", "Baking...",
+    "Beaming...", "Beboppin'...", "Befuddling...", "Billowing...", "Blanching...", "Bloviating...",
+    "Boogieing...", "Boondoggling...", "Booping...", "Bootstrapping...", "Brewing...", "Bunning...",
+    "Burrowing...", "Calculating...", "Canoodling...", "Caramelizing...", "Cascading...",
+    "Catapulting...", "Cerebrating...", "Channeling...", "Channelling...", "Choreographing...",
+    "Churning...", "Clauding...", "Coalescing...", "Cogitating...", "Combobulating...",
+    "Composing...", "Computing...", "Concocting...", "Considering...", "Contemplating...",
+    "Cooking...", "Crafting...", "Creating...", "Crunching...", "Crystallizing...",
+    "Cultivating...", "Deciphering...", "Deliberating...", "Determining...", "Dilly-dallying...",
+    "Discombobulating...", "Doing...", "Doodling...", "Drizzling...", "Ebbing...", "Effecting...",
+    "Elucidating...", "Embellishing...", "Enchanting...", "Envisioning...", "Evaporating...",
+    "Fermenting...", "Fiddle-faddling...", "Finagling...", "Flambéing...", "Flibbertigibbeting...",
+    "Flowing...", "Flummoxing...", "Fluttering...", "Forging...", "Forming...", "Frolicking...",
+    "Frosting...", "Gallivanting...", "Galloping...", "Garnishing...", "Generating...",
+    "Gesticulating...", "Germinating...", "Gitifying...", "Grooving...", "Gusting...",
+    "Harmonizing...", "Hashing...", "Hatching...", "Herding...", "Honking...", "Hullaballooing...",
+    "Hyperspacing...", "Ideating...", "Imagining...", "Improvising...", "Incubating...",
+    "Inferring...", "Infusing...", "Ionizing...", "Jitterbugging...", "Julienning...",
+    "Kneading...", "Leavening...", "Levitating...", "Lollygagging...", "Manifesting...",
+    "Marinating...", "Meandering...", "Metamorphosing...", "Misting...", "Moonwalking...",
+    "Moseying...", "Mulling...", "Mustering...", "Musing...", "Nebulizing...", "Nesting...",
+    "Newspapering...", "Noodling...", "Nucleating...", "Orbiting...", "Orchestrating...",
+    "Osmosing...", "Perambulating...", "Percolating...", "Perusing...", "Philosophising...",
+    "Photosynthesizing...", "Pollinating...", "Pondering...", "Pontificating...", "Pouncing...",
+    "Precipitating...", "Prestidigitating...", "Processing...", "Proofing...", "Propagating...",
+    "Puttering...", "Puzzling...", "Quantumizing...", "Razzle-dazzling...", "Razzmatazzing...",
+    "Recombobulating...", "Reticulating...", "Roosting...", "Ruminating...", "Sautéing...",
+    "Scampering...", "Schlepping...", "Scurrying...", "Seasoning...", "Shenaniganing...",
+    "Shimmying...", "Simmering...", "Skedaddling...", "Sketching...", "Slithering...",
+    "Smooshing...", "Sock-hopping...", "Spelunking...", "Spinning...", "Sprouting...", "Stewing...",
+    "Sublimating...", "Swirling...", "Swooping...", "Symbioting...", "Synthesizing...",
+    "Tempering...", "Thinking...", "Thundering...", "Tinkering...", "Tomfoolering...",
+    "Topsy-turvying...", "Transfiguring...", "Transmuting...", "Twisting...", "Undulating...",
+    "Unfurling...", "Unravelling...", "Vibing...", "Waddling...", "Wandering...", "Warping...",
+    "Whatchamacalliting...", "Whirlpooling...", "Whirring...", "Whisking...", "Wibbling...",
+    "Working...", "Wrangling...", "Zesting...", "Zigzagging...",
+};
+constexpr uint32_t kVerbMs = 20000;
 constexpr int kTail = 8;  // the bubble's pointer, px below it
 
 lv_obj_t* box(lv_obj_t* parent, uint32_t hex) {
@@ -480,8 +524,13 @@ bool update(void* p) {
   } else if (!strcmp(c.mood, "coding")) {
     title = "Ship code!!", sub = c.status;
   } else if (!strcmp(c.mood, "thinking")) {
-    title = "Thinking...", sub = c.status;
+    if (!s->thinking || now - s->verbAt >= kVerbMs) {
+      s->verb = esp_random() % (sizeof(kVerbs) / sizeof(kVerbs[0]));
+      s->verbAt = now;
+    }
+    title = kVerbs[s->verb], sub = c.status;
   }
+  s->thinking = title == kVerbs[s->verb];
   s->shownSeq = event ? c.evSeq : 0;
   s->asleep = !event && face == F_SLEEP;
   s->working = !event && online && (!strcmp(c.mood, "coding") || !strcmp(c.mood, "thinking"));

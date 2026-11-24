@@ -365,7 +365,7 @@
         .join("") +
       "</select></div>";
     h += "</div>";
-    if (k)
+    if (k || p.printer)
       h +=
         '<label class="check-row standalone"><input type="checkbox" id="dkPAuto"' +
         (p.auto ? " checked" : "") +
@@ -645,6 +645,7 @@
     ["ams", "AMS unit"],
     ["slots", "All slots"],
     ["summary", "Summary"],
+    ["fans", "Fans"],
   ];
   let prnStat = {};
   let prnAnn = []; /* cloud printers the PC agents push: {serial, name, model, pc, age_s} */
@@ -2096,7 +2097,7 @@
         '<div class="field"><label class="field-label">Printer page</label><select id="dkPPrn" style="width:auto">' +
         opt("", "Always shown", !p.printer) +
         (deck.printers || [])
-          .map((d) => opt(d.id, "Only while " + (d.name || d.id) + " is on", p.printer === d.id))
+          .map((d) => opt(d.id, "Only while " + (d.name || d.id) + " is on (and reporting)", p.printer === d.id))
           .join("") +
         "</select></div>";
     h += pageWhenField(p);
@@ -2252,7 +2253,9 @@
       $("dkPPrn").onchange = (e) => {
         if (e.target.value) p.printer = e.target.value;
         else delete p.printer;
+        if (!p.printer && !p.when) delete p.auto;
         setDirty(true);
+        renderPage();
       };
     if ($("dkAddPrinter"))
       $("dkAddPrinter").onclick = () => {
@@ -2666,7 +2669,7 @@
       const v = e.target.value;
       if (!v) {
         delete p.when;
-        delete p.auto;
+        if (!p.printer) delete p.auto;
       } else p.when = v;
       setDirty(true);
       renderPage();

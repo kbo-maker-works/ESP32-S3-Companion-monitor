@@ -112,9 +112,12 @@ constexpr int MAX_DECK_PAGES = 8;
 constexpr int MAX_PAGE_TILES = 24;
 
 enum TileType : uint8_t { TILE_ACTION = 0, TILE_SENSOR, TILE_METRIC, TILE_SLIDER, TILE_CLOCK, TILE_PRINTER, TILE_MEDIA, TILE_WIDGET };
-enum PrinterShow : uint8_t { PS_HERO = 0, PS_NOZZLE, PS_BED, PS_CHAMBER, PS_FILAMENT, PS_LAYER, PS_LIGHT, PS_AMS, PS_SLOTS, PS_SUMMARY };
+enum PrinterShow : uint8_t {
+  PS_HERO = 0, PS_NOZZLE, PS_BED, PS_CHAMBER, PS_FILAMENT, PS_LAYER, PS_LIGHT, PS_AMS, PS_SLOTS, PS_SUMMARY, PS_FANS,
+  PS_COUNT
+};
 // A printer tile's "show" in deck.json, by PrinterShow.
-extern const char* const kPrinterShowIds[PS_SUMMARY + 1];
+extern const char* const kPrinterShowIds[PS_COUNT];
 constexpr int MAX_PRINTERS = 2;
 enum MetricStyle : uint8_t { METRIC_NUMBER = 0, METRIC_CHART, METRIC_BAR };
 enum ActionKind : uint8_t {
@@ -126,10 +129,13 @@ enum ActionKind : uint8_t {
   ACT_APP,     // {app}: open a full-screen app (app.h)
 };
 enum ConfirmMode : uint8_t { CONFIRM_NONE = 0, CONFIRM_OFF, CONFIRM_ALWAYS };
-enum WhenKind : uint8_t { WHEN_ALWAYS = 0, WHEN_PC_ON, WHEN_PC_OFF };
+enum WhenKind : uint8_t { WHEN_ALWAYS = 0, WHEN_PC_ON, WHEN_PC_OFF, WHEN_PRINTER_ON };
 
 struct WhenDef {
   WhenKind kind = WHEN_ALWAYS;
+  // WHEN_PRINTER_ON: the printer it follows. Set by the parser: the page's
+  // "printer", else the first printer tile's, else the only printer configured.
+  String printer;
 };
 
 struct TileAction {
@@ -210,7 +216,7 @@ struct PrinterDef {
 struct PageDef {
   String id, name;
   String group;  // adjacent pages with the same group form one column
-  String printer;  // built only while this printer is powered
+  String printer;  // built only while this printer is powered, on and reporting
   WhenDef when;
   bool autoShow = false;  // "auto": slide here when it appears, back when it goes
   bool home = false;      // "home": the page the deck starts on

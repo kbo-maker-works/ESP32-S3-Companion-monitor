@@ -1,6 +1,6 @@
 // Work data for the Work app and its tiles: GitLab (merge requests by section,
-// as on GitLab's merge request dashboard, plus pipelines) and Jira (one section
-// per filter: its count and first tickets). The PC agent (pc-agent/td_work.py)
+// as on GitLab's merge request dashboard, plus pipelines), Jira (one section
+// per filter: its count and first tickets) and the PC's local branches. The PC agent (pc-agent/td_work.py)
 // polls them with the user's own tokens and pushes them here: POST
 // /api/pc/work. Field sizes match td_work.py's MAX_*.
 #ifndef WORK_DATA_H
@@ -62,6 +62,24 @@ struct WorkCol {   // a Jira filter
   uint8_t shown;   // its tickets sent (the first ones)
 };
 
+// A local branch, as pc-agent's branches.py classifies it (td_work.py Branches).
+constexpr int WORK_MAX_BRANCHES = 16;
+enum WorkVerdict : uint8_t { WORK_BR_KEEP, WORK_BR_REVIEW, WORK_BR_DELETE, WORK_BR_VERDICTS };
+const char* workVerdictName(int v);
+struct WorkBranch {
+  uint8_t verdict;   // WorkVerdict
+  char state[12];    // "active", "parked", "blocked", "stale", "merged", "review"
+  char tone;         // the state chip's, as WorkMr::tone
+  char repo[24];
+  char name[48];     // the branch
+  char ticket[16];   // "TPS-1813", "" = none
+  char mr[28];       // "core-services!69", "" = no MR
+  char reason[64];
+  char age[6];       // last commit: "today", "3d", "4mo"
+  bool current;      // checked out (or in a worktree)
+  char link[9];      // its MR's page, see WorkPipeline::link
+};
+
 struct WorkData {
   char pcId[17], pcName[24];    // the PC whose agent sent it (and opens its links)
   bool gitlab, jira;            // the agent sends that section
@@ -76,6 +94,13 @@ struct WorkData {
   uint8_t colCount;
   WorkTicket tickets[WORK_MAX_TICKETS];  // grouped by filter
   uint8_t ticketCount;
+  bool branches;                // the agent has branches.py (scanned only on demand)
+  bool brScanning;              // a scan is running on the PC
+  char brErr[40];
+  uint32_t brAt;                // epoch seconds of the last scan, 0 = never
+  int brN[WORK_BR_VERDICTS];    // branches per verdict (exact; the rows are the first ones)
+  WorkBranch br[WORK_MAX_BRANCHES];  // keep, review, delete; repo order inside each
+  uint8_t brCount;
   uint32_t rxMs;  // millis() of the last push, 0 = never
   uint32_t seq;   // bumps when the content changes
 };
@@ -92,5 +117,8 @@ bool workApply(const String& json, IPAddress from, String& err);
 // its browser: a signed "open:<link>" command (pc_metrics.h), so the PC must be
 // paired. The result comes back as a command toast.
 bool workOpen(const char* link, String& err);
+// Asks that PC's agent to scan the local branches now (signed "branches_scan");
+// the result comes with its next push. False when there is nothing to ask.
+bool workScanBranches(String& err);
 
 #endif  // WORK_DATA_H

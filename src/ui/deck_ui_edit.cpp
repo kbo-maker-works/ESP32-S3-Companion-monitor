@@ -303,6 +303,7 @@ void pickPrinters() {
     for (int u = 1; u <= units; u++) add(PS_AMS, "AMS " + String(u), 0, (uint8_t)u);
     add(PS_SLOTS, printerShowName(PS_SLOTS));
     add(PS_SUMMARY, printerShowName(PS_SUMMARY));
+    add(PS_FANS, printerShowName(PS_FANS));
   }
   heap_caps_free(st);
 }
@@ -656,7 +657,7 @@ bool edBuild(String& out, String& err) {
     } else if (d.type == TILE_PRINTER) {
       tv["type"] = "printer";
       tv["printer"] = d.printer;
-      tv["show"] = kPrinterShowIds[d.show <= PS_SUMMARY ? d.show : PS_HERO];
+      tv["show"] = kPrinterShowIds[d.show < PS_COUNT ? d.show : PS_HERO];
       if (d.show == PS_NOZZLE && d.nozzle) tv["nozzle"] = "left";
       if (d.show == PS_AMS) tv["unit"] = d.amsUnit;
     } else {
