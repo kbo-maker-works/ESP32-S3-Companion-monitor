@@ -111,6 +111,7 @@ void pcCmdSync() {
   while (pcTakeCmdResult(o)) {
     if (o.ok && o.cmd.startsWith("volume_set:")) continue;  // the slider is the feedback
     if (o.ok && o.cmd == "branches_scan") continue;         // the Branches tab says "scanning"
+    if (o.ok && o.cmd.startsWith("stock:")) continue;       // the chart that comes is the answer
     const String t = o.pcName + ": " + pcCmdLabel(o.cmd) + (o.ok ? "" : String(" - ") + (o.msg.length() ? o.msg : "failed"));
     deckToastShow(t.c_str(), o.ok ? 1200 : 2500);
   }
@@ -392,6 +393,7 @@ const char* pcCmdLabel(const String& cmd) {
   if (cmd == "open_agent") return "Opening the agent's settings";
   if (cmd == "branches_scan") return "Scanning branches";
   if (cmd.startsWith("claude:")) return "Answer for Claude";
+  if (cmd.startsWith("stock:")) return "Stock chart";
   return "Run";
 }
 

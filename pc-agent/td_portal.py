@@ -11,6 +11,7 @@ in portal/dist (cd portal && npm install && npm run build) and a small API:
     GET  /api/logs     the end of the agent's log (macOS service, windows/touchdeck.ps1)
     POST /api/bambu/signin, /code, /resend, /restart, /signout, GET /devices,
     PUT  /api/bambu/printers   Bambu Cloud sign-in and printers (td_bambu.py)
+    GET  /api/stocks/search?q=, PUT /api/stocks   the Stocks app's pinned symbols (td_stocks.py)
 
 It listens on 127.0.0.1 only, so the tokens never leave this machine and no
 firewall prompt shows. A token is never sent back: the page only learns whether
@@ -31,6 +32,7 @@ import urllib.parse
 from typing import List, Optional
 
 import td_bambu
+import td_stocks
 import td_work
 
 PORT = 4213
@@ -352,6 +354,33 @@ def create_app(portal):
     def bambu_printers(form: PrintersForm):
         return bambu().bambu_pick([p.model_dump() for p in form.printers])
 
+    class PinnedStock(BaseModel):
+        sym: str = Field(..., min_length=1, max_length=15, pattern=r"^[A-Za-z0-9.^=\-]+$")
+        name: str = Field("", max_length=80)
+
+    class StocksForm(BaseModel):
+        symbols: List[PinnedStock] = Field(default_factory=list, max_length=td_stocks.MAX_SYMBOLS)
+
+    def stocks():
+        if not portal.stocks:
+            raise HTTPException(404, "Stocks are off: see the agent's log")
+        return portal.stocks
+
+    @app.get("/api/stocks/search")
+    def stocks_search(q: str = ""):
+        q = q.strip()[:60]
+        if len(q) < 1:
+            return {"results": []}
+        stocks()
+        try:
+            return {"results": td_stocks.search(q)}
+        except Exception as e:
+            raise HTTPException(502, td_stocks.http_error(e))
+
+    @app.put("/api/stocks")
+    def stocks_pin(form: StocksForm):
+        return stocks().set_symbols([s.model_dump() for s in form.symbols])
+
     @app.get("/api/logs")
     def logs(lines: int = 200):
         got = tail(portal.log_file, max(1, min(1000, lines)))
@@ -386,9 +415,10 @@ def create_app(portal):
 
 class Portal:
     def __init__(self, worker, deck_host, deck_addr, pc_name, port=PORT, path=td_work.CONFIG_FILE,
-                 log_file=LOG_FILE, awake=None, bambu=None, bambu_path=td_bambu.CONFIG_FILE):
+                 log_file=LOG_FILE, awake=None, bambu=None, bambu_path=td_bambu.CONFIG_FILE, stocks=None):
         self.worker, self.deck_host, self.deck_addr, self.pc_name = worker, deck_host, deck_addr, pc_name
         self.awake = awake
+        self.stocks = stocks
         self.bambu, self.bambu_path = bambu, bambu_path
         self.pending = None  # a Bambu sign-in waiting for its code: {region, account, kind, tfa_key, at}
         self.port, self.path, self.log_file = port, path, log_file
@@ -408,6 +438,7 @@ class Portal:
                 "status": self.worker.status() if self.worker else None,
                 "awake": self.awake.status() if self.awake else None,
                 "bambu": self.bambu_state(),
+                "stocks": self.stocks.status() if self.stocks else None,
                 "started": self.started, "now": time.time()}
 
     # -- Bambu Cloud (td_bambu.py) ---------------------------------------------

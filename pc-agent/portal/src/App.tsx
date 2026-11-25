@@ -4,6 +4,7 @@ import { LogsPage } from "./components/LogsPage";
 import { deckView, Overview, sourceView } from "./components/Overview";
 import { bambuView, PrintersPage } from "./components/PrintersPage";
 import { AtlassianPage, GitLabPage } from "./components/SourcePages";
+import { StocksPage, stocksView } from "./components/StocksPage";
 import { Dot, type Tone } from "./components/ui";
 
 const PAGES = [
@@ -11,6 +12,7 @@ const PAGES = [
   { id: "gitlab", label: "GitLab", lede: "Merge requests, reviews, to-dos and pipelines for the Work app." },
   { id: "atlassian", label: "Atlassian", lede: "One account for Jira (board and tickets on the Work app) and Confluence." },
   { id: "printers", label: "Printers", lede: "Bambu Lab printers through Bambu Cloud, for the deck's printer pages and tiles." },
+  { id: "stocks", label: "Stocks", lede: "The stocks the deck's Stocks app follows, with their charts." },
   { id: "logs", label: "Logs", lede: "The agent's output, newest at the bottom." },
 ] as const;
 type Page = (typeof PAGES)[number]["id"];
@@ -143,6 +145,7 @@ export default function App() {
             const tone = !state ? null
               : p.id === "gitlab" || p.id === "atlassian" ? sourceView(state, p.id === "gitlab" ? "gitlab" : "jira").tone
               : p.id === "printers" ? bambuView(state).tone
+              : p.id === "stocks" ? stocksView(state).tone
               : null;
             return (
               <a key={p.id} href={`#${p.id}`} className={`nav-item ${page === p.id ? "active" : ""}`}
@@ -182,6 +185,9 @@ export default function App() {
         )}
         {state && page === "printers" && (
           <PrintersPage state={state} onBambu={(bambu) => setState((s) => s && { ...s, bambu })} />
+        )}
+        {state && page === "stocks" && (
+          <StocksPage state={state} onStocks={(stocks) => setState((s) => s && { ...s, stocks })} />
         )}
         {page === "logs" && <LogsPage />}
       </main>

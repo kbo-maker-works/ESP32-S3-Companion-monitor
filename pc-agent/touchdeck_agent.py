@@ -13,6 +13,8 @@ Feeds the CompaDeck (Guition JC3248W535) from this PC over WiFi:
   * GitLab and Jira for the Work app (td_work.py), set up on the settings page
     (td_portal.py, http://127.0.0.1:4213) or in ~/.touchdeck/work.json.
     Runs on macOS and Linux too (Now playing / PC control: Windows only).
+  * Stock quotes for the Stocks app (td_stocks.py): the symbols pinned on the
+    settings page, from Yahoo Finance (only the symbols are sent there).
 
 Usage
 -----
@@ -681,6 +683,20 @@ def start_work(target, pc_id, pc_name, verbose):
         return None
 
 
+def start_stocks(target, pc_id, pc_name, verbose):
+    """Quotes for the Stocks app (td_stocks.py, pinned on the settings page). Runs
+    with nothing pinned too: the page can pin them."""
+    try:
+        import td_stocks
+        stocks = td_stocks.Stocks(target.get, pc_id, pc_name, verbose)
+        stocks.start()
+        print("stocks: %s" % (", ".join(s["sym"] for s in stocks.symbols) or "nothing pinned"), flush=True)
+        return stocks
+    except Exception as e:  # a bad stocks.json must not stop the metrics
+        print("stocks off: %s" % e, flush=True)
+        return None
+
+
 def start_bambu(target, pc_id, pc_name, verbose):
     """Bambu printers through Bambu Cloud (td_bambu.py, signed in on the settings
     page). Runs signed out too: the page signs in and picks the printers."""
@@ -734,13 +750,13 @@ def start_batteries(pc_name):
         return None
 
 
-def start_portal(port, worker, host, target, pc_name, awake=None, bambu=None):
+def start_portal(port, worker, host, target, pc_name, awake=None, bambu=None, stocks=None):
     """The settings page on 127.0.0.1 (td_portal.py)."""
     if not port:
         return
     try:
         import td_portal
-        portal = td_portal.Portal(worker, host, target.get, pc_name, port, awake=awake, bambu=bambu)
+        portal = td_portal.Portal(worker, host, target.get, pc_name, port, awake=awake, bambu=bambu, stocks=stocks)
         if portal.serve():
             print("settings: %s" % portal.url, flush=True)
             return portal
@@ -919,7 +935,8 @@ def main():
     start_plan(target, pc_id, args.verbose)
     awake = start_awake()
     bambu = start_bambu(target, pc_id, pc_name, args.verbose)
-    portal = start_portal(args.portal_port, worker, args.host, target, pc_name, awake, bambu)
+    stocks = start_stocks(target, pc_id, pc_name, args.verbose)
+    portal = start_portal(args.portal_port, worker, args.host, target, pc_name, awake, bambu, stocks)
     # Taps on the deck's Work rows open their MR / ticket / pipeline here; a
     # Keep awake tile toggles it.
     handlers = {}
@@ -928,6 +945,8 @@ def main():
         handlers["branches_scan"] = worker.scan_branches  # the Work app's Branches tab
     if awake:
         handlers["awake_toggle"] = awake.command
+    if stocks:
+        handlers["stock:"] = stocks.command  # a chart for the Stocks app
     # The deck's Settings app: this agent's settings page, the deck's own portal.
     handlers["open_agent"] = opener(lambda: portal.url if portal else None)
     handlers["open_deck"] = opener(

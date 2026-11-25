@@ -53,6 +53,9 @@
 - **Bambu printers through Bambu Cloud** (td_bambu.py, below): for the deck's
   printer pages and tiles, with the printer left in cloud mode.
 
+- **Stock quotes** (td_stocks.py, below) for the deck's Stocks app: the symbols
+  pinned on the settings page, from Yahoo Finance.
+
 - **Claude Code's state** for the "Mascota Claude" widget: thinking, coding
   (with the tool it runs), several sessions at once, waiting for you (yellow),
   turn done (green), a failed tool (red), and asleep after 15 min of quiet.
@@ -361,6 +364,28 @@ cloud. When Bambu refuses the token, the agent stops retrying and both the
 settings page and the deck say to sign in again. Needs `paho-mqtt`
 (requirements.txt). `python td_bambu.py --sample --host <deck>` shows a sample
 printer on the deck's portal picker.
+
+## Stocks app (td_stocks.py)
+
+Agent settings page → **Stocks**: search by name or symbol and **Pin** (twelve
+at most, in the order shown, which the arrows change). The agent polls Yahoo
+Finance's public API, no account or key, with only the symbols: the prices of
+all of them in one request every 15 s while a market is open (`every_s` in
+`~/.touchdeck/stocks.json`, 10 to 300) and every 2 minutes while all are
+closed; each symbol's name, currency and trading hours every 30 minutes. It
+pushes the rows (price, previous close, the day's line, the market's state) to
+the deck (`POST /api/pc/stocks`) when they change. Yahoo gives some exchanges'
+quotes with a delay, by its own rules. The deck's **Stocks** widget (deck
+portal → a page → + Stocks) shows the watchlist or one pinned stock. On the deck, a tap on a row sends the signed
+command `stock:<sym>:<range>`; the agent fetches that chart (1D, 5D, 1M, 6M, 1Y
+or 5Y) and pushes it back (`POST /api/pc/stocks/chart`). An open market's 1D
+chart is asked again every minute while it is on screen. The pins live in
+`~/.touchdeck/stocks.json`. The PC must be paired for the charts (the rows come
+without it).
+
+Symbols are Yahoo's: `AAPL`, `SAN.MC` (Madrid), `^IBEX`, `BTC-USD`,
+`EURUSD=X`. Without the deck: `python td_stocks.py --once SAN.MC AAPL`,
+`python td_stocks.py --chart SAN.MC 1mo`, `python td_stocks.py --search iberdrola`.
 
 ## macOS
 

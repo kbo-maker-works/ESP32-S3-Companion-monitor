@@ -11,7 +11,8 @@
 #include <src/misc/lv_anim_private.h>  // lv_anim_t::var in the mascot's anim callback
 
 namespace widget {
-extern const Def kRadarWidget;  // widget_radar.cpp
+extern const Def kRadarWidget;   // widget_radar.cpp
+extern const Def kStocksWidget;  // widget_stocks.cpp
 namespace {
 
 using namespace deckui;
@@ -1503,7 +1504,7 @@ const Def kJira = {"jira", "Jira filter", nullptr, work::kJiraVariants,
 const Def kPc = {"pc", "PC stats", nullptr, pcstats::kVariants, 4,
                  pcstats::create, pcstats::update, pcstats::resize, pcstats::destroy, nullptr, true};
 
-const Def* const kWidgets[] = {&kWeather, &kMascot, &kQuota, &kGitlab, &kJira, &kPc, &kRadarWidget};
+const Def* const kWidgets[] = {&kWeather, &kMascot, &kQuota, &kGitlab, &kJira, &kPc, &kRadarWidget, &kStocksWidget};
 constexpr size_t kCount = sizeof(kWidgets) / sizeof(kWidgets[0]);
 
 }  // namespace

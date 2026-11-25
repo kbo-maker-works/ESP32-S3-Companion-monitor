@@ -33,6 +33,7 @@ export type State = {
   };
   awake: AwakeStatus | null;
   bambu: BambuState | null;
+  stocks: StocksState | null;
   started: number;
   now: number;
 };
@@ -55,6 +56,25 @@ export type BambuState = {
   };
 };
 type BambuReply = { bambu: BambuState; need?: "email" | "app"; devices?: BambuDevice[] | null };
+
+/** Stocks (td_stocks.py): pinned at once, not through Save. */
+export type PinnedStock = { sym: string; name: string };
+export type StockQuote = PinnedStock & {
+  price: number | null;
+  prev: number | null;
+  cur: string;
+  state: "" | "o" | "p" | "a" | "c";
+  dec: number;
+};
+export type StocksState = {
+  symbols: StockQuote[];
+  err: string;
+  polled: number;
+  every_s: number;
+  push: { ok: boolean | null; at: number; addr: string };
+};
+export type StockHit = PinnedStock & { exch: string; type: string };
+export const STOCKS_MAX = 12;
 
 /** Keep awake (td_awake.py): applied at once, not through Save. */
 export type AwakeStatus = {
@@ -160,6 +180,10 @@ export const api = {
     signout: () => call<BambuReply>("/api/bambu/signout", "POST"),
     devices: () => call<{ devices: BambuDevice[] }>("/api/bambu/devices"),
     pick: (printers: BambuPrinter[]) => call<BambuReply>("/api/bambu/printers", "PUT", { printers }),
+  },
+  stocks: {
+    search: (q: string) => call<{ results: StockHit[] }>(`/api/stocks/search?q=${encodeURIComponent(q)}`),
+    pin: (symbols: PinnedStock[]) => call<StocksState>("/api/stocks", "PUT", { symbols }),
   },
 };
 

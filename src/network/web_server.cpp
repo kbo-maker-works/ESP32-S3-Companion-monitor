@@ -7,6 +7,7 @@
 #include "ui/display_ui.h"
 #include "services/pc_metrics.h"
 #include "services/work_data.h"
+#include "services/stock_data.h"
 #include "hardware/led.h"
 #include "hardware/haptic.h"
 #include "hardware/audio.h"
@@ -2542,6 +2543,24 @@ static void handlePcWork() {
   sendJsonMessage(200, true, "OK");
 }
 
+// POST /api/pc/stocks - a PC agent's pinned stocks (pc-agent/td_stocks.py), and
+// POST /api/pc/stocks/chart - the chart the Stocks app asked for.
+static void handlePcStocks(bool chart) {
+  const String& body = server.arg("plain");
+  String err;
+  if (!body.length() || body.length() > 8192) {
+    sendJsonMessage(400, false, "Expected a JSON body up to 8 KB");
+    return;
+  }
+  const bool ok = chart ? stockChartApply(body, server.client().remoteIP(), err)
+                        : stockApply(body, server.client().remoteIP(), err);
+  if (!ok) {
+    sendJsonMessage(403, false, err.c_str());
+    return;
+  }
+  sendJsonMessage(200, true, "OK");
+}
+
 // POST /api/pc/printers - a PC agent's Bambu Cloud printers (pc-agent/td_bambu.py),
 // already parsed; only the cloud printers configured with their serial take it.
 static void handlePcPrinters() {
@@ -2920,6 +2939,8 @@ void initWebServer() {
   server.on("/api/pc/forget", HTTP_POST, handlePcForget);
   server.on("/api/pc/active", HTTP_POST, handlePcActive);
   server.on("/api/pc/work", HTTP_POST, handlePcWork);
+  server.on("/api/pc/stocks", HTTP_POST, []() { handlePcStocks(false); });
+  server.on("/api/pc/stocks/chart", HTTP_POST, []() { handlePcStocks(true); });
   server.on("/api/pc/printers", HTTP_POST, handlePcPrinters);
   server.on("/api/pc/bench", HTTP_POST, handlePcBench);
   server.on("/api/pc/bench", HTTP_GET, handlePcBenchGet);

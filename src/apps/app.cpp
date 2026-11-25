@@ -4,6 +4,7 @@
 #include "apps/app_work.h"
 #include "apps/app_radar.h"
 #include "apps/app_bench.h"
+#include "apps/app_stocks.h"
 #include "ui/deck_ui_int.h"
 #include "services/pc_metrics.h"
 #include "config.h"
@@ -180,7 +181,7 @@ const Def kAjustes = {"ajustes", "Settings", "mdi:cog-outline", true, openInfo, 
 // --- Registry ------------------------------------------------------------------
 // Order = order in the portal's app list. Apps in their own file (app_radar.cpp)
 // export their Def through a header.
-const Def* const kApps[] = {&kIa, &kWork, &kBench, &kSistema, &kRed, &kRadar, &kAudio, &kAjustes};
+const Def* const kApps[] = {&kIa, &kWork, &kStocks, &kBench, &kSistema, &kRed, &kRadar, &kAudio, &kAjustes};
 constexpr size_t kAppCount = sizeof(kApps) / sizeof(kApps[0]);
 
 }  // namespace
