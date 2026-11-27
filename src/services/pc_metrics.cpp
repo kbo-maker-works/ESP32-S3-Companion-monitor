@@ -252,9 +252,9 @@ static void parseClaude(PcSource* pc, JsonObjectConst c) {
   }
   cl.sessionsRxMs = millis();
 
-  // Plan usage and context: each field only when the companion has it.
+  // Plan usage: each field only when the companion has it.
   ClaudeUsage& u = cl.usage;
-  if (!u.rxMs) u.q5 = u.q7 = u.ctx = -1;
+  if (!u.rxMs) u.q5 = u.q7 = u.g5 = u.g7 = u.t5 = u.t7 = -1;
   bool any = false;
   auto pct = [&](const char* key, float& out) {
     if (!c[key].is<float>()) return;
@@ -268,13 +268,16 @@ static void parseClaude(PcSource* pc, JsonObjectConst c) {
   };
   pct("q5", u.q5);
   pct("q7", u.q7);
-  pct("ctx", u.ctx);
   num("q5r", u.q5r);
   num("q7r", u.q7r);
-  num("ctx_tok", u.ctxTok);
-  num("ctx_win", u.ctxWin);
-  if (c["proj"].is<const char*>()) strlcpy(u.proj, c["proj"], sizeof(u.proj)), any = true;
-  if (c["model"].is<const char*>()) strlcpy(u.model, c["model"], sizeof(u.model)), any = true;
+  pct("g5", u.g5);
+  pct("g7", u.g7);
+  pct("t5", u.t5);
+  pct("t7", u.t7);
+  num("g5r", u.g5r);
+  num("g7r", u.g7r);
+  num("t5r", u.t5r);
+  num("t7r", u.t7r);
   if (c["acct"].is<const char*>()) strlcpy(u.acct, c["acct"], sizeof(u.acct)), any = true;
   if (c["org"].is<const char*>()) strlcpy(u.org, c["org"], sizeof(u.org)), any = true;
   if (any) u.rxMs = millis();

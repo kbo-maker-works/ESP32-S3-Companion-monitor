@@ -9,13 +9,35 @@
 
 namespace claudefmt {
 
-// What one meter shows: 0 = 5-hour window, 1 = 7-day window, 2 = context.
-enum Kind : uint8_t { K_5H = 0, K_7D, K_CTX };
+// What one meter shows: Claude Code's 5-hour and 7-day windows, then
+// Antigravity's (Gemini models, third-party models), 5-hour and weekly.
+enum Kind : uint8_t { K_5H = 0, K_7D, K_G5, K_G7, K_T5, K_T7, K_COUNT };
 
 // Percent for a kind, -1 when unknown or the companion is silent.
 inline float pct(const ClaudeUsage& u, bool online, Kind k) {
   if (!online || !u.rxMs) return -1;
-  return k == K_5H ? u.q5 : k == K_7D ? u.q7 : u.ctx;
+  switch (k) {
+    case K_5H: return u.q5;
+    case K_7D: return u.q7;
+    case K_G5: return u.g5;
+    case K_G7: return u.g7;
+    case K_T5: return u.t5;
+    case K_T7: return u.t7;
+    default: return -1;
+  }
+}
+
+// Reset epoch of a kind's window, 0 = unknown.
+inline uint32_t reset(const ClaudeUsage& u, Kind k) {
+  switch (k) {
+    case K_5H: return u.q5r;
+    case K_7D: return u.q7r;
+    case K_G5: return u.g5r;
+    case K_G7: return u.g7r;
+    case K_T5: return u.t5r;
+    case K_T7: return u.t7r;
+    default: return 0;
+  }
 }
 
 // Colour of a fill: accent, amber from 75 %, red from 90 %.
@@ -35,27 +57,11 @@ inline void countdown(char* out, size_t n, uint32_t reset) {
   else snprintf(out, n, "%ldm", s / 60 > 0 ? s / 60 : 1L);
 }
 
-// 74000 -> "74k", 1000000 -> "1M", 1500000 -> "1.5M"
-inline void tokens(char* out, size_t n, uint32_t t) {
-  if (t >= 1000000 && t % 1000000 == 0) snprintf(out, n, "%luM", (unsigned long)(t / 1000000));
-  else if (t >= 1000000) snprintf(out, n, "%.1fM", t / 1e6);
-  else snprintf(out, n, "%luk", (unsigned long)((t + 500) / 1000));
-}
-
-// The line under a meter: the reset countdown, or the context's tokens.
+// The line under a meter: the reset countdown.
 inline void detail(char* out, size_t n, const ClaudeUsage& u, Kind k) {
   out[0] = 0;
-  if (k == K_CTX) {
-    if (u.ctxTok && u.ctxWin) {
-      char a[12], b[12];
-      tokens(a, sizeof(a), u.ctxTok);
-      tokens(b, sizeof(b), u.ctxWin);
-      snprintf(out, n, "%s / %s", a, b);
-    }
-    return;
-  }
   char c[16];
-  countdown(c, sizeof(c), k == K_5H ? u.q5r : u.q7r);
+  countdown(c, sizeof(c), reset(u, k));
   if (c[0]) snprintf(out, n, "Resets in %s", c);
 }
 

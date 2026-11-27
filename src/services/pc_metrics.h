@@ -84,17 +84,16 @@ enum : int8_t { PC_MEDIA_STOPPED = 0, PC_MEDIA_PAUSED, PC_MEDIA_PLAYING };
 //              "ev_sub": "esperando respuesta",
 //              "ev_id": 1411279918}         // changes with every new event
 // The companion sends the event only while it is recent (~30 s).
-// Plan usage and context fill for the IA app, each optional (absent = unknown):
+// Plan usage for the IA app and the usage widget, each optional (absent = unknown):
 //   "q5": 42.5, "q5r": 1763121600,   // 5-hour window: % used, reset (Unix epoch)
 //   "q7": 18,   "q7r": 1763380800,   // 7-day window
-//   "ctx": 37, "ctx_tok": 74000, "ctx_win": 200000,  // latest session's context
-//   "proj": "desktop-companion", "model": "Opus 5.5"  // that session
+//   "g5", "g5r", "g7", "g7r"          // Antigravity: Gemini models' 5 h and weekly windows
+//   "t5", "t5r", "t7", "t7r"          // Antigravity: third-party models' windows
 struct ClaudeUsage {
-  float q5, q7, ctx;        // percent, -1 = unknown
+  float q5, q7;             // percent, -1 = unknown
   uint32_t q5r, q7r;        // reset epochs, 0 = unknown
-  uint32_t ctxTok, ctxWin;  // 0 = unknown
-  char proj[24];
-  char model[20];
+  float g5, g7, t5, t7;     // Antigravity (td_agy_statusline.py): Gemini / third-party, -1 = unknown
+  uint32_t g5r, g7r, t5r, t7r;
   char acct[40];            // the logged-in account ("you@company.com"), "" = unknown
   char org[32];             // its organization
   uint32_t rxMs;            // millis() of the last packet carrying any of it, 0 = never

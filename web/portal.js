@@ -338,11 +338,6 @@
     $("fxCustom").classList.toggle("hidden", v !== 5);
   }
   $("tileFx").addEventListener("change", updateFxFields);
-  for (let h = 0; h < 24; h++) $("dailyHour").add(new Option(String(h).padStart(2, "0") + ":00", h));
-  function updateDailyFields() {
-    $("dailyFields").classList.toggle("hidden", $("wallSource").value === "0");
-  }
-  $("wallSource").addEventListener("change", updateDailyFields);
   function updateNightFields() {
     $("nightScheduleFields").classList.toggle("hidden", !$("nightEnabled").checked);
   }
@@ -646,16 +641,8 @@
     setVal("warnThreshold", c.display.warnThreshold);
     setVal("wallEvery", c.display.wallEvery ?? 5);
     setVal("wallOrder", c.display.wallOrder ?? 0);
-    setVal("wallSource", c.display.wallSource ?? (c.display.wallDaily ? 1 : 0));
     setCheck("sdCard", c.display.sdCard ?? false);
     $("sdSave").disabled = true;
-    setVal("dailyMax", c.display.dailyMax ?? 100);
-    setWallSource(c.display.wallSource ?? (c.display.wallDaily ? 1 : 0));
-    setVal("dailyOrient", c.display.dailyOrient ?? 0);
-    setVal("dailyCount", c.display.dailyCount ?? 12);
-    setVal("dailyHour", c.display.dailyHour ?? 3);
-    updateDailyFields();
-    dailyStatus();
     setVal("glassTint", c.display.glassTint);
     setVal("glassBlur", c.display.glassBlur);
     setVal("glassDim", c.display.glassDim);
@@ -1172,33 +1159,8 @@
     l: { files: [], selected: new Set(), loaded: 24 },
     p: { files: [], selected: new Set(), loaded: 24 },
   };
-  let wallSource = 0,
-    wallView = 0;
-  function wallGallery() {
-    return wallSource === 2 ? $("wallBrowse").value : wallSource === 1 ? "d" : "m";
-  }
-  function resetWalls() {
-    wallView++;
-    wallCache = Math.max(Date.now(), wallCache + 1);
-    for (const o of ["l", "p"]) {
-      walls[o].loaded = 24;
-      walls[o].files = [];
-      walls[o].selected.clear();
-      wallRender(o);
-    }
-    wallStatus();
-  }
-  function setWallSource(source) {
-    $("wallBrowseField").classList.toggle("hidden", source !== 2);
-    if (wallSource === source) return;
-    wallSource = source;
-    resetWalls();
-  }
-  $("wallBrowse").onchange = (e) => {
-    e.stopPropagation();
-    resetWalls();
-  };
-  $("wallBrowse").oninput = (e) => e.stopPropagation();
+  let wallView = 0;
+
   let wallBusy = false,
     wallRefreshing = false,
     wallCache = Date.now();
@@ -1209,15 +1171,10 @@
     return j;
   }
   function wallButtons() {
-    $("wallBrowse").disabled = wallBusy;
     for (const o of ["l", "p"]) {
       const s = walls[o];
       $("wallMore_" + o).disabled = wallBusy || wallRefreshing;
-      $("wallPick_" + o).disabled = wallBusy || wallSource === 1;
-      $("wallHint_" + o).textContent =
-        wallGallery() === "d"
-          ? "Daily pictures, downloaded by the deck. Uploads go to My pictures."
-          : "Add pictures or drop them here.";
+      $("wallPick_" + o).disabled = wallBusy;
       $("wallShow_" + o).disabled = wallBusy || s.selected.size !== 1;
       $("wallDelete_" + o).disabled = wallBusy || !s.selected.size;
       $("wallAll_" + o).disabled = wallBusy || !s.files.length;
@@ -1265,8 +1222,6 @@
         img.src =
           "/api/deck/walls/file?o=" +
           o +
-          "&gallery=" +
-          wallGallery() +
           "&n=" +
           encodeURIComponent(f.n) +
           "&v=" +
@@ -1296,7 +1251,6 @@
       grid.appendChild(button);
     }
     $("wallSpace_" + o).textContent =
-      (wallSource === 2 ? (wallGallery() === "d" ? "Daily: " : "My pictures: ") : "") +
       s.files.length +
       " of " +
       (s.count || 0) +
@@ -1321,15 +1275,14 @@
   async function wallStatus() {
     if (wallRefreshing) return;
     wallRefreshing = true;
-    const view = wallView,
-      gallery = wallGallery();
+    const view = wallView;
     try {
       for (const o of ["l", "p"]) {
         const s = walls[o];
         let data,
           files = [];
         for (let offset = 0; offset < s.loaded; offset += 24) {
-          data = await wallApi("walls?o=" + o + "&gallery=" + gallery + "&offset=" + offset + "&limit=24");
+          data = await wallApi("walls?o=" + o + "&offset=" + offset + "&limit=24");
           if (view !== wallView) return;
           files.push(...data.files);
           if (offset + 24 >= data.count) break;
@@ -1360,10 +1313,8 @@
               Math.floor(data.free / 1048576) +
               " MB free of " +
               Math.floor(data.total / 1048576) +
-              " MB - My pictures: " +
+              " MB - " +
               sd.own.join(" landscape / ") +
-              " portrait; Daily: " +
-              sd.daily.join(" landscape / ") +
               " portrait");
         wallRender(o);
       }
@@ -1381,7 +1332,7 @@
     wallBusy = true;
     wallButtons();
     try {
-      await wallApi(path + "&gallery=" + wallGallery(), "POST");
+      await wallApi(path, "POST");
       if (bust) wallCache = Date.now();
       await wallStatus();
     } catch (e) {
@@ -1442,11 +1393,7 @@
     } finally {
       $("wallProgress_" + o).textContent = attempted + " / " + files.length + " - " + stored + " stored";
       wallCache = Date.now();
-      // Uploads land in My pictures: show them when Both was browsing Daily.
-      if (wallSource === 2 && stored && $("wallBrowse").value !== "m") {
-        $("wallBrowse").value = "m";
-        resetWalls();
-      } else await wallStatus();
+      await wallStatus();
       wallBusy = false;
       wallButtons();
     }
@@ -1468,11 +1415,11 @@
     const gallery = $("wallGallery_" + o);
     gallery.ondragover = (e) => {
       e.preventDefault();
-      e.dataTransfer.dropEffect = wallBusy || wallSource === 1 ? "none" : "copy";
+      e.dataTransfer.dropEffect = wallBusy ? "none" : "copy";
     };
     gallery.ondrop = (e) => {
       e.preventDefault();
-      if (wallSource !== 1) wallBatch(o, [...e.dataTransfer.files]);
+      wallBatch(o, [...e.dataTransfer.files]);
     };
     $("wallShow_" + o).onclick = () =>
       wallAction(o, "walls/show?o=" + o + "&n=" + encodeURIComponent([...walls[o].selected][0]), false);
@@ -1483,49 +1430,10 @@
         wallAction(o, "walls/delete?o=" + o + "&n=*");
     };
   }
-  /* Daily pictures: status line, Download now, gallery refresh when the source or set changes. */
-  let dailyActive = false,
-    dailyRunning = false,
-    dailyTick = 0;
-  function dailyText(d) {
-    if (d.running) return d.step + " - " + (d.got[0] + d.got[1]) + " of " + (d.want[0] + d.want[1]) + " stored";
-    const parts = [d.files[0] + " landscape and " + d.files[1] + " portrait pictures on the device"];
-    parts.push(d.lastRun ? "last download " + new Date(d.lastRun * 1000).toLocaleString() : "not downloaded yet");
-    if (d.error) parts.push(d.error);
-    return parts.join(" - ");
-  }
-  async function dailyStatus() {
-    try {
-      const d = await wallApi("daily");
-      const refresh = dailyActive !== d.active || (dailyRunning && !d.running);
-      dailyActive = d.active;
-      setWallSource(d.source ?? (d.active ? 1 : 0));
-      dailyRunning = d.running;
-      $("dailyState").textContent = dailyText(d);
-      $("dailyFetch").disabled = d.running;
-      if (refresh) {
-        wallCache = Date.now();
-        await wallStatus();
-      }
-      wallButtons();
-    } catch (e) {}
-  }
-  $("dailyFetch").onclick = async () => {
-    try {
-      showToast((await wallApi("daily/run", "POST")).message, false);
-      await dailyStatus();
-    } catch (e) {
-      showToast(e.message, true);
-    }
-  };
   wallStatus();
   setInterval(() => {
     if (!document.hidden && !wallBusy && $("wallGrid_l").offsetParent !== null) wallStatus();
   }, 5000);
-  setInterval(() => {
-    if (document.hidden || $("wallGrid_l").offsetParent === null) return;
-    if (dailyRunning || ++dailyTick % 5 === 0) dailyStatus();
-  }, 2000);
 
   let initial = "overview";
   try {

@@ -678,91 +678,7 @@
                     gallery is empty. Show now pins a picture for the next boot. Config backups include the
                     settings, not the pictures.
                   </p>
-                  <div class="grid-2">
-                    <div class="field">
-                      <label class="field-label" for="wallSource">Pictures</label>
-                      <div class="select-wrap">
-                        <select id="wallSource" name="wallSource">
-                          <option value="0">My pictures</option>
-                          <option value="1">Daily pictures (Windows Spotlight)</option>
-                          <option value="2">Both</option>
-                        </select>
-                      </div>
-                      <p class="field-hint" data-tip>
-                        Daily downloads Windows Spotlight pictures once a day. Internal storage replaces the
-                        previous set; microSD keeps an archive. Both mixes daily and your own pictures.
-                      </p>
-                    </div>
-                  </div>
                   <p id="sdWallState" class="field-hint" role="status"></p>
-                  <div id="dailyFields" class="hidden" style="margin-top: 14px">
-                    <div class="grid-2">
-                      <div class="field">
-                        <label class="field-label" for="dailyOrient">Download for</label>
-                        <div class="select-wrap">
-                          <select id="dailyOrient" name="dailyOrient">
-                            <option value="0">Landscape</option>
-                            <option value="1">Portrait</option>
-                            <option value="2">Both</option>
-                          </select>
-                        </div>
-                      </div>
-                      <div class="field">
-                        <label class="field-label" for="dailyCount">Pictures per day</label>
-                        <div class="select-wrap">
-                          <select id="dailyCount" name="dailyCount">
-                            <option value="4">4</option>
-                            <option value="6">6</option>
-                            <option value="8">8</option>
-                            <option value="12">12</option>
-                            <option value="16">16</option>
-                            <option value="20">20</option>
-                            <option value="24">24</option>
-                            <option value="32">32</option>
-                          </select>
-                        </div>
-                        <p class="field-hint" data-tip>
-                          Counts above 16 require a mounted microSD card. For each orientation, 12 take about
-                          5 minutes. Swipes can stutter meanwhile; a thin line at the top of the screen shows
-                          the download.
-                        </p>
-                      </div>
-                      <div class="field">
-                        <label class="field-label" for="dailyMax">Daily archive per orientation (microSD)</label>
-                        <div class="select-wrap">
-                          <select id="dailyMax" name="dailyMax">
-                            <option value="50">50</option>
-                            <option value="100">100</option>
-                            <option value="200">200</option>
-                            <option value="500">500</option>
-                          </select>
-                        </div>
-                      </div>
-                      <div class="field">
-                        <label class="field-label" for="dailyHour">Download at</label>
-                        <div class="select-wrap">
-                          <select id="dailyHour" name="dailyHour"></select>
-                        </div>
-                        <p class="field-hint" data-tip>
-                          Waits until nobody has touched the screen for 30 seconds. If the deck was off at
-                          this hour, it waits for the next day; Download now fetches at once.
-                        </p>
-                      </div>
-                    </div>
-                    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px">
-                      <button type="button" class="btn" id="dailyFetch">Download now</button
-                      ><span id="dailyState" role="status" class="field-hint" style="margin: 0"></span>
-                    </div>
-                  </div>
-                  <div class="field hidden" id="wallBrowseField">
-                    <label class="field-label" for="wallBrowse">Browse gallery</label>
-                    <div class="select-wrap">
-                      <select id="wallBrowse">
-                        <option value="m">My pictures</option>
-                        <option value="d" selected>Daily pictures</option>
-                      </select>
-                    </div>
-                  </div>
                   <section
                     id="wallGallery_l"
                     style="margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px"
@@ -1843,8 +1759,7 @@
               <div class="card" id="sdCardBox">
                 <h2 class="card-title">microSD card</h2>
                 <p class="maintenance-copy">
-                  Holds the wallpaper gallery (also shown by the photo frame), the daily picture archive and
-                  icon packs. Without a card, pictures go to internal storage and icon packs are not
+                  Holds the wallpaper gallery (also shown by the photo frame) and icon packs. Without a card, pictures go to internal storage and icon packs are not
                   available. The card uses GPIO 10-13. Pictures already stored stay where they are.
                 </p>
                 <label class="check-row standalone"

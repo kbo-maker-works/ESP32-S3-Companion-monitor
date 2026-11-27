@@ -51,7 +51,7 @@ SESSIONS_DIR = os.path.join(STATE_DIR, "sessions")
 EVENT_FILE = os.path.join(STATE_DIR, "event.json")
 USAGE_DIR = os.path.join(STATE_DIR, "usage")   # written by td_statusline.py (or the touchdeck-usage mod)
 LIMITS_FRESH_S = 3 * 24 * 3600   # plan windows: the last reading, if not ancient
-CTX_FRESH_S = 6 * 3600           # a session idle longer no longer shows its context
+AGY_USAGE_FILE = os.path.join(os.path.expanduser("~"), ".touchdeck", "agy_usage.json")  # td_agy_statusline.py
 
 EVENT_SHOW_S = 30      # an event (input / done / fail) is sent this long
 SESSION_IDLE_S = 600   # a session quiet this long no longer counts as working
@@ -345,7 +345,7 @@ def session_list(sessions, now):
 
 
 # ---------------------------------------------------------------------------
-# Plan usage and context, from the touchdeck-usage mod's files (one per session)
+# Plan usage, from the touchdeck-usage mod's files (one per session)
 # ---------------------------------------------------------------------------
 def iso_epoch(text):
     """ISO text or Unix seconds (td_statusline.py) -> Unix seconds, 0 = unknown."""
@@ -359,13 +359,25 @@ def iso_epoch(text):
         return 0
 
 
-def pretty_model(model):
-    """'claude-opus-5-5[1m]' -> 'Opus 5.5 1M'; anything else as it came."""
-    m = re.match(r"(?:claude-)?([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(\[1m\])?$", model or "")
-    if not m:
-        return clip(model or "", 19)
-    name = m.group(1).capitalize() + " " + m.group(2) + ("." + m.group(3) if m.group(3) else "")
-    return clip(name + (" 1M" if m.group(4) else ""), 19)
+def agy_usage(now):
+    """Antigravity's windows (td_agy_statusline.py): Gemini "g5"/"g7" and
+    third-party models "t5"/"t7", % used and reset epoch; -1 = unknown. A window
+    whose reset has passed since agy last ran is back to 0 %."""
+    out = {"g5": -1, "g7": -1, "t5": -1, "t7": -1}
+    data = read_json(AGY_USAGE_FILE)
+    quota = data.get("quota") if isinstance(data, dict) else None
+    if not isinstance(quota, dict):
+        return out
+    for bucket, key in (("gemini-5h", "g5"), ("gemini-weekly", "g7"), ("3p-5h", "t5"), ("3p-weekly", "t7")):
+        w = quota.get(bucket)
+        if not isinstance(w, dict) or w.get("pct") is None:
+            continue
+        reset = int(w.get("resets_at") or 0)
+        if reset and reset <= now:
+            out[key], out[key + "r"] = 0.0, 0
+        else:
+            out[key], out[key + "r"] = round(float(w["pct"]), 1), reset
+    return out
 
 
 def usage_state(now):
@@ -390,7 +402,7 @@ def usage_state(now):
     try:
         names = os.listdir(USAGE_DIR)
     except OSError:
-        return {}
+        names = []  # no Claude Code status line here: Antigravity's windows still go
     for name in names:
         if name.endswith(".json") and name not in ("limits.json", "account.json"):
             path = os.path.join(USAGE_DIR, name)
@@ -403,30 +415,22 @@ def usage_state(now):
             else:
                 files.append((mtime, path))
     files.sort(reverse=True)
-    ctx_done = False
     for mtime, path in files:
-        if limits_done and ctx_done:
+        if limits_done:
             break
         u = read_json(path)
         if not isinstance(u, dict):
             continue
         limits = u.get("limits") or {}
         # The windows are the account's: the newest file that has them.
-        if not limits_done and limits and now - mtime < LIMITS_FRESH_S:
+        if limits and now - mtime < LIMITS_FRESH_S:
             limits_done = True
             for kind, key in (("five_hour", "q5"), ("seven_day", "q7")):
                 w = limits.get(kind)
                 if isinstance(w, dict) and w.get("pct") is not None:
                     out[key] = round(float(w["pct"]), 1)
                     out[key + "r"] = iso_epoch(w.get("resets_at"))
-        # The context is a session's: the newest one still open.
-        if not ctx_done and not u.get("ended") and now - mtime < CTX_FRESH_S and u.get("ctx_pct") is not None:
-            ctx_done = True
-            out.update(ctx=round(float(u["ctx_pct"]), 1), ctx_tok=int(u.get("ctx_tokens") or 0),
-                       ctx_win=int(u.get("ctx_window") or 0), proj=clip(u.get("project") or "", 23),
-                       model=pretty_model(u.get("model")))
-    if not ctx_done:
-        out["ctx"] = -1
+    out.update(agy_usage(now))
     return out
 
 
@@ -683,6 +687,21 @@ def start_work(target, pc_id, pc_name, verbose):
         return None
 
 
+def start_agy(verbose):
+    """Antigravity's quota after headless agy runs (td_agy.py); only with its status line set up."""
+    try:
+        import td_agy
+        if not td_agy.available():
+            return None
+        watch = td_agy.AgyQuota(verbose)
+        watch.start()
+        print("agy: quota refreshed after agy runs", flush=True)
+        return watch
+    except Exception as e:
+        print("agy off: %s" % e, flush=True)
+        return None
+
+
 def start_stocks(target, pc_id, pc_name, verbose):
     """Quotes for the Stocks app (td_stocks.py, pinned on the settings page). Runs
     with nothing pinned too: the page can pin them."""
@@ -936,6 +955,7 @@ def main():
     awake = start_awake()
     bambu = start_bambu(target, pc_id, pc_name, args.verbose)
     stocks = start_stocks(target, pc_id, pc_name, args.verbose)
+    start_agy(args.verbose)
     portal = start_portal(args.portal_port, worker, args.host, target, pc_name, awake, bambu, stocks)
     # Taps on the deck's Work rows open their MR / ticket / pipeline here; a
     # Keep awake tile toggles it.

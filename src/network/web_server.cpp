@@ -21,7 +21,6 @@
 #include "ui/deck_icons.h"
 #include "services/deck_wall.h"
 #include "hardware/deck_sd.h"
-#include "services/deck_daily.h"
 #include "ui/deck_sys.h"
 #include "core/psram_json.h"
 #include "core/crash_log.h"
@@ -260,13 +259,7 @@ static void handleApiConfig() {
   display["glassDim"] = dispSettings.glassDim;
   display["wallEvery"] = dispSettings.wallEvery;
   display["wallOrder"] = dispSettings.wallOrder;
-  display["wallDaily"] = dispSettings.wallSource != 0;
-  display["wallSource"] = dispSettings.wallSource;
   display["sdCard"] = dispSettings.sdCard;
-  display["dailyMax"] = dispSettings.dailyMax;
-  display["dailyHour"] = dispSettings.dailyHour;
-  display["dailyOrient"] = dispSettings.dailyOrient;
-  display["dailyCount"] = dispSettings.dailyCount;
   display["glassOn"] = dispSettings.glassOn;
   display["glassAutoText"] = dispSettings.glassAutoText;
   display["askBg"] = dispSettings.askBg;
@@ -455,13 +448,7 @@ static void handleConfigExport() {
   display["glassDim"] = dispSettings.glassDim;
   display["wallEvery"] = dispSettings.wallEvery;
   display["wallOrder"] = dispSettings.wallOrder;
-  display["wallDaily"] = dispSettings.wallSource != 0;
-  display["wallSource"] = dispSettings.wallSource;
   display["sdCard"] = dispSettings.sdCard;
-  display["dailyMax"] = dispSettings.dailyMax;
-  display["dailyHour"] = dispSettings.dailyHour;
-  display["dailyOrient"] = dispSettings.dailyOrient;
-  display["dailyCount"] = dispSettings.dailyCount;
   display["glassOn"] = dispSettings.glassOn;
   display["glassAutoText"] = dispSettings.glassAutoText;
   display["askBg"] = dispSettings.askBg;
@@ -687,13 +674,8 @@ static void handleConfigImport() {
   nextDisplay.glassDim = displayDefaults.glassDim;
   nextDisplay.wallEvery = displayDefaults.wallEvery;
   nextDisplay.wallOrder = displayDefaults.wallOrder;
-  nextDisplay.wallDaily = displayDefaults.wallDaily;
   nextDisplay.wallSource = 0;
   nextDisplay.sdCard = false;
-  nextDisplay.dailyMax = 100;
-  nextDisplay.dailyHour = displayDefaults.dailyHour;
-  nextDisplay.dailyOrient = displayDefaults.dailyOrient;
-  nextDisplay.dailyCount = displayDefaults.dailyCount;
   nextDisplay.glassOn = displayDefaults.glassOn;
   nextDisplay.glassAutoText = displayDefaults.glassAutoText;
   nextDisplay.askBg = displayDefaults.askBg;
@@ -712,23 +694,7 @@ static void handleConfigImport() {
   if (!display["glassDim"].isNull()) READ_INT(display, "glassDim", 0, 60, nextDisplay.glassDim, uint8_t);
   if (!display["wallEvery"].isNull()) READ_INT(display, "wallEvery", 0, 60, nextDisplay.wallEvery, uint8_t);
   if (!display["wallOrder"].isNull()) READ_INT(display, "wallOrder", 0, 1, nextDisplay.wallOrder, uint8_t);
-  if (!display["wallSource"].isNull()) {
-    READ_INT(display, "wallSource", 0, 2, nextDisplay.wallSource, uint8_t);
-  } else if (!display["wallDaily"].isNull()) {
-    READ_BOOL(display, "wallDaily", nextDisplay.wallDaily);
-    nextDisplay.wallSource = nextDisplay.wallDaily ? 1 : 0;
-  }
-  nextDisplay.wallDaily = nextDisplay.wallSource != 0;
   if (!display["sdCard"].isNull()) READ_BOOL(display, "sdCard", nextDisplay.sdCard);
-  if (!display["dailyMax"].isNull()) READ_INT(display, "dailyMax", 50, 500, nextDisplay.dailyMax, uint16_t);
-  if (!validDailyMax(nextDisplay.dailyMax)) {
-    sendJsonMessage(400, false, "invalid dailyMax");
-    return;
-  }
-  if (!display["dailyHour"].isNull()) READ_INT(display, "dailyHour", 0, 23, nextDisplay.dailyHour, uint8_t);
-  if (!display["dailyOrient"].isNull()) READ_INT(display, "dailyOrient", 0, 2, nextDisplay.dailyOrient, uint8_t);
-  if (!display["dailyCount"].isNull())
-    READ_INT(display, "dailyCount", 1, DAILY_MAX_COUNT, nextDisplay.dailyCount, uint8_t);
   if (!validWallEvery(nextDisplay.wallEvery)) {
     sendJsonMessage(400, false, "invalid wallEvery");
     return;
@@ -1317,7 +1283,7 @@ static void handleSdFormat() {
   sendJsonMessage(200, true, "Formatting the card. Restarting...", true);
 }
 
-// Wallpapers page: gallery source, Daily download and Glass rotation.
+// Wallpapers page: Glass rotation.
 static void handleSaveWallpapers() {
   int every = dispSettings.wallEvery, order = dispSettings.wallOrder;
   if (server.hasArg("wallEvery")) {
@@ -1336,34 +1302,10 @@ static void handleSaveWallpapers() {
     }
     order = value.toInt();
   }
-  if (server.hasArg("wallSource") && server.arg("wallSource") != "0" &&
-      server.arg("wallSource") != "1" && server.arg("wallSource") != "2") {
-    sendJsonMessage(400, false, "invalid wallSource");
-    return;
-  }
-  int dailyMax = dispSettings.dailyMax;
-  if (server.hasArg("dailyMax")) {
-    dailyMax = server.arg("dailyMax").toInt();
-    if (!validDailyMax(dailyMax) || String(dailyMax) != server.arg("dailyMax")) {
-      sendJsonMessage(400, false, "invalid dailyMax");
-      return;
-    }
-  }
-  dispSettings.dailyMax = dailyMax;
   deck::wallInvalidateJobs();
   dispSettings.wallEvery = every;
   dispSettings.wallOrder = order;
-  const uint8_t oldSource = deck::wallSource();
-  const uint32_t oldPlan = dispSettings.dailyOrient << 8 | dispSettings.dailyCount;
-  if (server.hasArg("wallSource")) dispSettings.wallSource = server.arg("wallSource").toInt();
-  dispSettings.wallDaily = dispSettings.wallSource != 0;
-  dispSettings.dailyHour = (uint8_t)clampedArg("dailyHour", dispSettings.dailyHour, 0, 23);
-  dispSettings.dailyOrient = (uint8_t)clampedArg("dailyOrient", dispSettings.dailyOrient, 0, 2);
-  dispSettings.dailyCount = (uint8_t)clampedArg("dailyCount", dispSettings.dailyCount, 1, DAILY_MAX_COUNT);
   saveSettings();
-  if (dispSettings.wallSource != oldSource) deck::wallSetSource(dispSettings.wallSource);
-  // A new plan fetches again today instead of waiting for the hour.
-  if (oldPlan != (uint32_t)(dispSettings.dailyOrient << 8 | dispSettings.dailyCount)) deck::dailyReplan();
   sendJsonMessage(200, true, "Wallpaper settings applied.");
 }
 
@@ -2087,9 +2029,7 @@ static void handleWallStatus() {
   server.send(200, "application/json", out);
 }
 
-static bool wallApiDaily() {
-  return server.hasArg("gallery") ? server.arg("gallery") == "d" : deck::wallSource() == 1;
-}
+static bool wallApiDaily() { return false; }  // own pictures only
 
 static String wallApiRef(const String& name) {
   return deck::wallValidName(name) ? String(wallApiDaily() ? "d/" : "m/") + name : name;
@@ -2098,10 +2038,6 @@ static String wallApiRef(const String& name) {
 static void handleWallsStatus() {
   bool p;
   if (!wallOrientation(p)) return;
-  if (server.hasArg("gallery") && server.arg("gallery") != "m" && server.arg("gallery") != "d") {
-    sendJsonMessage(400, false, "invalid gallery");
-    return;
-  }
   const bool daily = wallApiDaily();
   const size_t offset = std::max<long>(0, server.arg("offset").toInt());
   const size_t limit = server.hasArg("limit") ? constrain(server.arg("limit").toInt(), 1, 96) : 24;
@@ -2134,7 +2070,6 @@ static void handleWallsStatus() {
   // Index copies on the card; on LittleFS each would be a directory scan.
   for (int orient = 0; orient < 2 && deck::wallOnSd(); orient++) {
     doc["sd"]["own"][orient] = deck::wallListDir(deck::wallDir(orient, false)).size();
-    doc["sd"]["daily"][orient] = deck::wallListDir(deck::wallDir(orient, true)).size();
   }
   String out;
   serializeJson(doc, out);
@@ -2183,12 +2118,7 @@ static void handleWallUpload() {
       wallError = "";
       wallComplete = false;
       wallBytes = 0;
-      const bool daily = server.arg("gallery") == "d";
       if (!deck::wallOnSd() && !deck::deckFsReady()) wallError = "file system not available";
-      else if (daily && !deck::wallValidName(server.arg("n"))) wallError = "daily uploads need n=<8 hex>.jpg";
-      else if (daily && deck::dailyRunning()) wallError = "the deck is downloading daily pictures";
-      else if (!daily && deck::wallSource() == 1)
-        wallError = "daily pictures are downloaded, switch to My pictures to add your own";
       else {
         wallUploadCleanup();
         wallUploadRoom = wallRoom(server.arg("o") == "p");
@@ -2230,26 +2160,6 @@ static void handleWallFinish() {
   if (!err.length() && !deck::wallValidateJpeg(wallUploadPath(), p))
     err = p ? "expected a baseline 320x480 JPEG" : "expected a baseline 480x320 JPEG";
   if (!err.length() && wallRoom(p) < deck::WALL_RESERVE) err = "flash full";
-  // Daily archive upload (PC download): keeps the URL-based name so the deck dedupes it.
-  if (server.arg("gallery") == "d") {
-    const String name = server.arg("n");
-    const String path = String(deck::wallDir(p, true)) + "/" + name;
-    const bool dup = deck::wallFs().exists(path);
-    if (!err.length() && !dup) {
-      deck::wallFs().mkdir(deck::wallRoot());
-      deck::wallFs().mkdir(deck::wallDir(p, true));
-      if (!deck::wallFs().rename(wallUploadPath(), path)) err = "could not store the picture";
-      else {
-        deck::wallIndexChanged(p, true, name);
-        deck::dailyTrim(p);
-        if (deck::wallSource() != 0) deck::wallGalleryChanged(p);
-      }
-    }
-    wallUploadCleanup();
-    if (err.length()) sendJsonMessage(400, false, err.c_str());
-    else sendJsonMessage(200, true, dup ? "already there" : "stored");
-    return;
-  }
   auto files = deck::wallListDir(deck::wallDir(p, false));
   const uint32_t last = files.empty() ? 0 : strtoul(files.back().name().c_str(), nullptr, 16);
   if (!err.length() && last == UINT32_MAX) err = "file counter exhausted";
@@ -2354,20 +2264,6 @@ static void handleWallsShow() {
   if (!deck::wallPin(p, name)) { sendJsonMessage(500, false, "could not save pin"); return; }
   deck::wallRequest(p, name);
   sendJsonMessage(200, true, "Wallpaper queued.");
-}
-
-static void handleDailyRun() {
-  if (!deck::dailyStart()) sendJsonMessage(409, false, "already fetching, offline, a printer is on, or waiting for clock sync");
-  else sendJsonMessage(200, true, "Fetching daily pictures.");
-}
-
-static void handleDailyStatus() {
-  JsonDocument doc(psramJson());
-  deck::dailyStatus(doc.to<JsonObject>());
-  String out;
-  serializeJson(doc, out);
-  server.sendHeader("Cache-Control", "no-store");
-  server.send(200, "application/json", out);
 }
 
 static void handleWallsNext() {
@@ -2970,8 +2866,6 @@ void initWebServer() {
   server.on("/api/deck/walls/delete", HTTP_POST, handleWallsDelete);
   server.on("/api/deck/walls/show", HTTP_POST, handleWallsShow);
   server.on("/api/deck/walls/next", HTTP_POST, handleWallsNext);
-  server.on("/api/deck/daily", HTTP_GET, handleDailyStatus);
-  server.on("/api/deck/daily/run", HTTP_POST, handleDailyRun);
   server.on("/api/deck/wallpaper/remove", HTTP_POST, handleWallRemove);
   server.on("/api/deck/bench", HTTP_POST, handleDeckBench);
   server.on("/api/deck/frame", HTTP_GET, handleFrameGet);

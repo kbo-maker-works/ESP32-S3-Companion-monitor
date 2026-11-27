@@ -49,7 +49,6 @@ struct LedFxSettings {
 };
 
 // Panel and PC metric tile settings, each its own NVS scalar.
-constexpr uint8_t DAILY_MAX_COUNT = 32;
 
 struct DisplaySettings {
   uint8_t  rotation;          // 0..3 (x90 degrees)
@@ -63,13 +62,8 @@ struct DisplaySettings {
   uint8_t  glassOn;           // Glass: accent fill of an "on" tile, opacity %, 20..100
   uint8_t  wallEvery;         // Wallpaper interval in minutes, 0 = off
   uint8_t  wallOrder;         // 0 = in order, 1 = shuffle
-  bool     wallDaily;         // Daily downloads enabled
-  uint8_t  wallSource;        // 0 = own, 1 = daily, 2 = both
+  uint8_t  wallSource;        // 0 = own pictures (the daily download was removed; kept for deck_wall)
   bool     sdCard;
-  uint16_t dailyMax;          // SD archive per orientation: 50, 100, 200 or 500
-  uint8_t  dailyHour;         // Daily fetch hour, local time 0..23
-  uint8_t  dailyOrient;       // 0 = landscape, 1 = portrait, 2 = both
-  uint8_t  dailyCount;        // Daily pictures per orientation, 1..DAILY_MAX_COUNT
   bool     glassAutoText;     // Glass: text colour and tint follow the picture per tile
   // Glass: Claude Code's prompt cards (deck_ui_card.cpp).
   uint8_t  askBg;             // the glass behind them, opacity % 0..90, or ASK_BG_TILES
@@ -176,7 +170,6 @@ extern HapticSettings hapticSettings;
 extern AudioSettings audioSettings;
 extern PrinterSettings printerSettings;
 
-bool validDailyMax(int count);
 bool validWallEvery(int minutes);
 bool validFrameEvery(int minutes);
 void loadSettings();

@@ -439,7 +439,7 @@ untouched for 12 h drops off (a terminal closed without SessionEnd). Two
 sessions in the same folder are numbered ("desktop-companion 2"). If the
 packet would pass 1900 bytes the details go first, then rows.
 
-## Plan usage and context (AI app, "Claude usage" widget)
+## Plan usage (AI app, "AI usage" widget)
 
 The 5-hour and 7-day windows and each session's context come from Claude
 Code's own status line: on every update it pipes the status line command a
@@ -462,11 +462,44 @@ one is read from Claude Code's config (`~/.claude.json`, `oauthAccount`, or
 that account (email and organization) over its quotas; an account with no
 response yet shows `--` rather than the previous account's numbers.
 
-The agent sends the logged-in account's windows and the newest open session's
-context in the `claude` object (`q5`, `q5r`, `q7`, `q7r`, `ctx`, `ctx_tok`,
-`ctx_win`, `proj`, `model`, `acct`, `org`). The windows only exist on a Pro/Max subscription, after a
+The agent sends the logged-in account's windows in the `claude` object (`q5`,
+`q5r`, `q7`, `q7r`, `acct`, `org`); not a session's context, which says little
+with several sessions open. The windows only exist on a Pro/Max subscription, after a
 session's first response. (Files written by the older `touchdeck-usage` mod
 in the same folder are read too.)
+
+### Antigravity's quota (td_agy_statusline.py)
+
+The Antigravity CLI (`agy`) has the same kind of status line: it pipes the
+command a JSON payload whose `quota` holds the real windows, `gemini-5h` and
+`gemini-weekly` for Gemini models and `3p-5h` / `3p-weekly` for third-party
+models (Claude, GPT), each with `remaining_fraction` and `reset_time`.
+`td_agy_statusline.py` writes them to `~/.touchdeck/agy_usage.json` and prints a
+status line (`Gemini 4 Hydrogen (High) | ctx:3% | 5h:11% wk:3%`). In
+`~/.gemini/antigravity-cli/settings.json`:
+
+```json
+"statusLine": {"type": "command",
+               "command": "/path/to/pc-agent/.venv/bin/python -I /path/to/pc-agent/td_agy_statusline.py"}
+```
+
+The agent sends them in the `claude` object as `g5`/`g5r`, `g7`/`g7r` (Gemini)
+and `t5`/`t5r`, `t7`/`t7r` (third-party). The quota is the account's, so the
+Antigravity app spends the same windows, but they only move here while `agy`
+runs; a window whose reset has passed since then is shown at 0 %.
+
+**Headless agy** (`agy -p`) never runs the status line. An interactive `agy`
+hands it the quota a second or two after it starts, before any message, so
+`td_agy.py` (started by the agent, macOS / Linux) opens `agy` for a moment in a
+pseudo-terminal whenever a conversation is newer than the last reading (an
+`agy -p`, the CLI or the Antigravity app; it waits until the conversation has
+been quiet for 20 s), lets the status line save the quota and closes it. No
+message is sent and no conversation is created. `python td_agy.py` does one
+refresh by hand. On Windows only the interactive status line updates it.
+
+The deck's **AI usage** widget picks what to track: Claude (both windows, or
+5 hours or the week alone), Antigravity (the same, or its other models), or
+Claude + Antigravity (four rows).
 
 ## Now playing, volume and PC control (td_pc.py)
 

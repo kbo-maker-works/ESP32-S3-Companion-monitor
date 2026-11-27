@@ -788,28 +788,61 @@ const Variant kVariants[] = {{"compacto", "Compact"}, {"detalle", "Detail"}};
 
 }  // namespace mascot
 
-// --- Claude: plan usage and context -------------------------------------------
-// One meter (5 horas, semana, contexto: name, big %, bar, a detail line when
-// there is room) or all three as rows ("todo"). Tap opens the IA app.
+// --- AI usage: Claude Code and Antigravity plan windows ------------------------
+// The variant picks the CLI and what it shows: one meter (name, big %, bar, the
+// reset countdown when there is room) or its windows as rows, or both CLIs'
+// 5-hour and weekly windows together. Tap opens the IA app. No context meter:
+// with several sessions open, one session's context says little.
 namespace quota {
 
 using claudefmt::Kind;
+constexpr int MAX_ROWS = 4;
+
+struct Mode {
+  const char* id;    // deck.json "variant" (the Claude ones keep their old ids)
+  const char* name;  // in the editors
+  uint8_t n;         // meters; 1 = one big meter, more = rows
+  Kind kinds[MAX_ROWS];
+};
+
+// The first is the default. Labels: plain for Claude alone, "AGY" for
+// Antigravity, both named when both are shown.
+const Mode kModes[] = {
+    {"todo", "Claude", 2, {claudefmt::K_5H, claudefmt::K_7D}},
+    {"5h", "Claude 5 hours", 1, {claudefmt::K_5H}},
+    {"semana", "Claude week", 1, {claudefmt::K_7D}},
+    {"agy", "Antigravity", 2, {claudefmt::K_G5, claudefmt::K_G7}},
+    {"agy5h", "Antigravity 5 hours", 1, {claudefmt::K_G5}},
+    {"agysemana", "Antigravity week", 1, {claudefmt::K_G7}},
+    {"agy3p", "Antigravity, other models", 2, {claudefmt::K_T5, claudefmt::K_T7}},
+    {"ambos", "Claude + Antigravity", 4, {claudefmt::K_5H, claudefmt::K_7D, claudefmt::K_G5, claudefmt::K_G7}},
+};
+constexpr int MODE_COUNT = sizeof(kModes) / sizeof(kModes[0]);
+
+const char* kindName(Kind k, bool both) {
+  switch (k) {
+    case claudefmt::K_5H: return both ? "CLAUDE 5H" : "5 HOURS";
+    case claudefmt::K_7D: return both ? "CLAUDE WEEK" : "WEEK";
+    case claudefmt::K_G5: return both ? "AGY 5H" : "AGY 5 HOURS";
+    case claudefmt::K_G7: return "AGY WEEK";
+    case claudefmt::K_T5: return "AGY OTHER 5H";
+    case claudefmt::K_T7: return "AGY OTHER WEEK";
+    default: return "";
+  }
+}
 
 struct Row {
   lv_obj_t *box, *name, *pct, *bar;
 };
 
 struct State {
-  bool all;
-  Kind kind;
-  lv_obj_t *name, *pct, *bar, *sub;  // single meter
-  Row rows[3];                       // "todo"
+  const Mode* mode;
+  lv_obj_t *name, *pct, *bar, *sub;  // one meter
+  Row rows[MAX_ROWS];                // rows
   uint32_t key = UINT32_MAX;
   uint32_t shown = 0;                // Fnv of what is on screen
   int w = 0, h = 0;
 };
-
-const char* kNames[] = {"5 HOURS", "WEEK", "CONTEXT"};
 
 lv_obj_t* makeBar(lv_obj_t* parent) {
   lv_obj_t* b = lv_bar_create(parent);
@@ -837,12 +870,13 @@ void setBar(lv_obj_t* bar, lv_obj_t* pctLabel, float pct) {
 void* create(lv_obj_t* t, const char* variant, const char*) {
   State* s = new (std::nothrow) State();
   if (!s) return nullptr;
-  s->all = !strcmp(variant, "todo");
-  s->kind = !strcmp(variant, "semana") ? claudefmt::K_7D
-            : !strcmp(variant, "contexto") ? claudefmt::K_CTX : claudefmt::K_5H;
-  if (!s->all) {
+  s->mode = &kModes[0];
+  for (const Mode& m : kModes)
+    if (!strcmp(variant, m.id)) s->mode = &m;  // an unknown one (the old "contexto"): the default
+  const bool both = s->mode->n == MAX_ROWS;
+  if (s->mode->n == 1) {
     s->name = label(t, &deck_font_12, LV_OPA_70);
-    lv_label_set_text(s->name, kNames[s->kind]);
+    lv_label_set_text(s->name, kindName(s->mode->kinds[0], false));
     s->pct = label(t, &deck_font_28);
     s->bar = makeBar(t);
     lv_obj_set_size(s->bar, LV_PCT(86), 6);
@@ -852,21 +886,21 @@ void* create(lv_obj_t* t, const char* variant, const char*) {
     lv_obj_set_style_max_width(s->sub, LV_PCT(100), 0);
     return s;
   }
-  for (int i = 0; i < 3; i++) {
+  if (both) lv_obj_set_style_pad_row(t, 1, 0);  // four rows: every pixel of the tile counts
+  for (int i = 0; i < s->mode->n; i++) {
     Row& r = s->rows[i];
     r.box = lv_obj_create(t);
     lv_obj_remove_style_all(r.box);
     lv_obj_remove_flag(r.box, (lv_obj_flag_t)(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE));
-    lv_obj_set_size(r.box, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_size(r.box, LV_PCT(100), 22);
     r.name = label(r.box, &deck_font_12, LV_OPA_70);
-    lv_label_set_text(r.name, kNames[i]);
+    lv_label_set_text(r.name, kindName(s->mode->kinds[i], both));
     lv_obj_align(r.name, LV_ALIGN_TOP_LEFT, 0, 0);
     r.pct = label(r.box, &deck_font_12);
     lv_obj_align(r.pct, LV_ALIGN_TOP_RIGHT, 0, 0);
     r.bar = makeBar(r.box);
     lv_obj_set_size(r.bar, LV_PCT(100), 5);
     lv_obj_align(r.bar, LV_ALIGN_TOP_LEFT, 0, 17);
-    lv_obj_set_height(r.box, 22);
   }
   return s;
 }
@@ -880,30 +914,38 @@ bool update(void* p) {
   if (key == s->key) return false;
   s->key = key;
   const ClaudeUsage& u = pcClaude().usage;
+  const Mode& m = *s->mode;
 
   // Only touch the labels (and report a change) when what they show moves.
   char buf[40] = "";
   Fnv f;
   f.add((uint32_t)s->w);
   f.add((uint32_t)s->h);
-  for (int i = 0; i < 3; i++) f.add((uint32_t)lroundf(claudefmt::pct(u, online, (Kind)i) * 10));
-  if (!s->all) {
-    claudefmt::detail(buf, sizeof(buf), u, s->kind);
+  for (int i = 0; i < m.n; i++) f.add((uint32_t)lroundf(claudefmt::pct(u, online, m.kinds[i]) * 10));
+  if (m.n == 1) {
+    claudefmt::detail(buf, sizeof(buf), u, m.kinds[0]);
     f.add(buf);
   }
   if (f.v == s->shown) return false;
   s->shown = f.v;
 
-  if (s->all) {
-    const int rowH = s->h / 3;
-    for (int i = 0; i < 3; i++) {
+  if (m.n > 1) {
+    // Rows share the height (the tile's column puts 2 px between them, 1 for
+    // four); four get a tight row: the text, a 2-3 px bar right under it.
+    const int gap = m.n == MAX_ROWS ? 1 : 2;
+    const int rowH = LV_MIN(22, (s->h - gap * (m.n - 1)) / m.n);
+    for (int i = 0; i < m.n; i++) {
       Row& r = s->rows[i];
-      show(r.box, rowH >= 18);
-      setBar(r.bar, r.pct, claudefmt::pct(u, online, (Kind)i));
+      show(r.box, rowH >= 15);
+      lv_obj_set_height(r.box, rowH);
+      const int barH = rowH >= 21 ? 5 : rowH >= 18 ? 3 : 2;
+      lv_obj_set_height(r.bar, barH);
+      lv_obj_align(r.bar, LV_ALIGN_TOP_LEFT, 0, rowH >= 21 ? 17 : rowH - barH);
+      setBar(r.bar, r.pct, claudefmt::pct(u, online, m.kinds[i]));
     }
     return true;
   }
-  const float pct = claudefmt::pct(u, online, s->kind);
+  const float pct = claudefmt::pct(u, online, m.kinds[0]);
   // The big number follows the tile; the detail line only where it fits.
   lv_obj_set_style_text_font(s->pct, s->h >= 80 && s->w >= 90 ? &deck_font_28 : &deck_font_20, 0);
   show(s->name, s->h >= 50);
@@ -923,9 +965,11 @@ void resize(void* p, int w, int h) {
 
 void destroy(void* p) { delete (State*)p; }
 
-// The first is the default: all three, the one most dashboards want.
-const Variant kVariants[] = {
-    {"todo", "All"}, {"5h", "5 hours"}, {"semana", "Week"}, {"contexto", "Context"}};
+Variant kVariants[MODE_COUNT];
+const Variant* variants() {
+  for (int i = 0; i < MODE_COUNT; i++) kVariants[i] = {kModes[i].id, kModes[i].name};
+  return kVariants;
+}
 
 }  // namespace quota
 
@@ -1488,7 +1532,7 @@ const Def kWeather = {"tiempo", "Weather", nullptr, kWeatherVariants, 2,
 const Def kMascot = {"mascota", "Claude mascot", nullptr, mascot::kVariants, 2,
                      mascot::create, mascot::update, mascot::resize, mascot::destroy, mascot::tap};
 
-const Def kQuota = {"claude", "Claude usage", "ia", quota::kVariants, 4,
+const Def kQuota = {"claude", "AI usage", "ia", quota::variants(), quota::MODE_COUNT,
                     quota::create, quota::update, quota::resize, quota::destroy};
 
 // No "app": the tap goes to the widget, which opens the Work app on its section.

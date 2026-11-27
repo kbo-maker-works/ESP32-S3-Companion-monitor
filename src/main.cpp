@@ -17,7 +17,6 @@
 #include "hardware/audio.h"
 #include "hardware/power.h"
 #include "core/crash_log.h"
-#include "services/deck_daily.h"
 #include "hardware/deck_sd.h"
 #include "core/companion_settings.h"
 #include "services/flight_service.h"
@@ -46,7 +45,7 @@ void setup() {
   heap_caps_malloc_extmem_enable(128);
   // mbedTLS (this build: CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC) in PSRAM for every TLS
   // client from boot: before, the radar's HTTPS took ~35 KB of internal RAM per
-  // fetch until a printer or the daily download had installed it.
+  // fetch until a printer had installed it.
   tlsPsramInstall();
 
   loadSettings();
@@ -105,5 +104,4 @@ void loop() {
   // After the backlight: the LED reads the level the panel just settled on.
   ledTick();
   displayTick();
-  deck::dailyPoll();
 }

@@ -1210,16 +1210,12 @@ void deckTick() {
   if (frameActive()) {
     printerWatch();
     frameTick();
-    if (!compOwnsScreen()) {
-      dailyBarSync();
-      lv_timer_handler();
-    }
+    if (!compOwnsScreen()) lv_timer_handler();
     return;
   }
 
   if (s_ed.pending != EditState::P_NONE) edFinish();
   tickWallpaper();
-  dailyBarSync();
   updateHeaders();
   blinkClocks();
   qpUpdateStatus(false);
