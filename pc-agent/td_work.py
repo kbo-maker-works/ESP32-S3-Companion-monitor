@@ -295,13 +295,14 @@ class GitLab:
         sent.sort(key=lambda r: r[0])
         out = {"sec": counts, "active": sum(counts[:ACTIVE_SECTIONS]), "mrs": sent,
                "todos": self.total("/todos", state="pending")}
-        out["pipelines"] = self.pipelines(list(mine.values()), links)
+        out["pipelines"], out["ko"] = self.pipelines(list(mine.values()), links)
         out["_links"] = links
-        out["ko"] = sum(1 for p in out["pipelines"] if p[2] == "f")
         return out
 
     def pipelines(self, mine, links):
-        """Latest pipeline per interesting ref: your MRs' branches and the main ones."""
+        """Latest pipeline per interesting ref: your MRs' branches and the main ones.
+        Returns the rows and the KO count, which only takes your MRs' branches: a
+        failed develop or main is someone else's, shown in red but not alerted."""
         projects = {}  # full path -> (short name, refs wanted)
         for p in self.projects:
             projects.setdefault(p, [p.rsplit("/", 1)[-1], set()])
@@ -325,9 +326,10 @@ class GitLab:
                 seen.add(ref)
                 st = PIPE_STATUS.get(pl.get("status"), "c")
                 rows.append([clip(name, MAX_NAME), clip(ref, MAX_REF), st, self.pipe_info(pid, pl, st),
-                             link(links, pl.get("web_url")), pl.get("updated_at") or ""])
+                             link(links, pl.get("web_url")), pl.get("updated_at") or "", ref in refs])
         rows.sort(key=lambda r: (PIPE_ORDER[r[2]], -self.stamp(r[5])))
-        return [r[:5] for r in rows[:MAX_PIPELINES]]
+        rows = rows[:MAX_PIPELINES]
+        return [r[:5] for r in rows], sum(1 for r in rows if r[2] == "f" and r[6])
 
     @staticmethod
     def stamp(iso):

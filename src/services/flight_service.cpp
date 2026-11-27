@@ -100,13 +100,36 @@ void setState(State st, int code = 0) {
   xSemaphoreGive(s_mux);
 }
 
+// Sources with the same readsb v2 JSON (only the array's key differs), tried
+// in order. One that answers 429 is skipped until its quota resets.
+// adsb.lol: 500 requests a day per IP. adsb.fi: 1 a second, no daily cap.
+struct Source {
+  const char* name;
+  const char* fmt;  // lat, lon, radius in nautical miles
+  const char* key;  // the array of planes
+};
+const Source SOURCES[] = {
+    {"adsb.lol", "https://api.adsb.lol/v2/point/%.4f/%.4f/%d", "ac"},
+    {"adsb.fi", "https://opendata.adsb.fi/api/v2/lat/%.4f/lon/%.4f/dist/%d", "aircraft"},
+};
+constexpr int NSRC = sizeof(SOURCES) / sizeof(SOURCES[0]);
+constexpr uint32_t BLOCK_DEFAULT_S = 3600;  // when a 429 has no reset header
+uint32_t s_blockedUntil[NSRC] = {};          // millis(), 0 = usable (task only)
+
+bool blocked(int i, uint32_t now) {
+  if (!s_blockedUntil[i]) return false;
+  if ((int32_t)(now - s_blockedUntil[i]) >= 0) {
+    s_blockedUntil[i] = 0;
+    return false;
+  }
+  return true;
+}
+
 void fetch() {
   const companion::Place cfg = companion::place();  // a copy: the portal may change the settings meanwhile
   const float lat0 = cfg.lat, lon0 = cfg.lon;
   const int km = cfg.radarKm;
   const int nm = (int)ceilf(km / 1.852f);
-  char url[112];
-  snprintf(url, sizeof(url), "https://api.adsb.lol/v2/point/%.4f/%.4f/%d", lat0, lon0, nm);
 
   WiFiClientSecure tls;
   tls.setInsecure();  // no certificate check: public data, read only
@@ -114,14 +137,36 @@ void fetch() {
   // HTTP/1.1 (HTTPClient's default): adsb.lol answers HTTP/1.0 with 426 Upgrade Required
   http.setTimeout(8000);
   http.setUserAgent("desktop-companion/1.0");
-  if (!http.begin(tls, url)) {
-    setState(State::Error, -1);
-    return;
-  }
-  const int code = http.GET();
-  if (code != 200) {
-    Serial.printf("Radar: HTTP %d\n", code);
+  static const char* HDRS[] = {"x-ratelimit-reset", "retry-after"};
+
+  const Source* src = nullptr;
+  int code = 429;  // all blocked: report the rate limit
+  for (int i = 0; i < NSRC; i++) {
+    if (blocked(i, millis())) continue;
+    char url[112];
+    snprintf(url, sizeof(url), SOURCES[i].fmt, lat0, lon0, nm);
+    if (!http.begin(tls, url)) {
+      code = -1;
+      continue;
+    }
+    http.collectHeaders(HDRS, 2);
+    code = http.GET();
+    if (code == 200) {
+      src = &SOURCES[i];
+      break;
+    }
+    if (code == 429) {
+      uint32_t secs = http.header("x-ratelimit-reset").toInt();
+      if (!secs) secs = http.header("retry-after").toInt();
+      if (!secs) secs = BLOCK_DEFAULT_S;
+      s_blockedUntil[i] = (millis() + secs * 1000UL) | 1;
+      Serial.printf("Radar: %s rate limited, skipped for %lu s\n", SOURCES[i].name, (unsigned long)secs);
+    } else {
+      Serial.printf("Radar: %s HTTP %d\n", SOURCES[i].name, code);
+    }
     http.end();
+  }
+  if (!src) {
     setState(State::Error, code);
     return;
   }
@@ -129,7 +174,7 @@ void fetch() {
   // Only the fields used: the full JSON has ~40 per plane
   // Both documents in PSRAM: internal RAM is short with TLS up (and WiFi needs it)
   JsonDocument filter(psramJson());
-  JsonObject f = filter["ac"].add<JsonObject>();
+  JsonObject f = filter[src->key].add<JsonObject>();
   for (const char* k : {"hex", "flight", "r", "t", "lat", "lon", "alt_baro", "gs", "track", "true_heading",
                         "dbFlags", "category"})
     f[k] = true;
@@ -164,7 +209,7 @@ void fetch() {
   }
   int n = 0;
   const float kx = cosf(lat0 * DEG_TO_RAD);
-  for (JsonObject a : doc["ac"].as<JsonArray>()) {
+  for (JsonObject a : doc[src->key].as<JsonArray>()) {
     if (n >= SCAN) break;
     if (!a["lat"].is<float>() || !a["lon"].is<float>()) continue;
     const char* cat = a["category"] | "";
@@ -205,7 +250,7 @@ void fetch() {
   s_store.at = millis();
   s_store.seq++;
   xSemaphoreGive(s_mux);
-  Serial.printf("Radar: %d planes within %d km (%u B)\n", inRadius, km, (unsigned)sink.len);
+  Serial.printf("Radar: %d planes within %d km from %s (%u B)\n", inRadius, km, src->name, (unsigned)sink.len);
 }
 
 void run(void*) {

@@ -47,6 +47,10 @@ struct State {
   int itemCount = 0, tapeLen = 0;  // tapeLen: one turn of the tape, in px
   bool tapeFresh = true, tapeBig = false;
   uint32_t frameAt = 0;
+  // Where the tape is: the item at the left edge and how far it has gone past
+  // it. Kept across pushes, so new prices (other text widths) don't make it jump.
+  int head = 0;
+  float headOff = 0;
   Row rows[MAX_ROWS] = {};
   // A single stock
   lv_obj_t *sym = nullptr, *name = nullptr, *price = nullptr, *chgRow = nullptr, *tri = nullptr, *chg = nullptr,
@@ -182,8 +186,7 @@ void drawText(lv_layer_t* layer, const char* t, const lv_font_t* f, lv_color_t c
   lv_draw_label(layer, &d, &a);
 }
 
-// One turn of the tape from millis(): the items from the offset on, again and
-// again until the right edge.
+// The items from the head on, again and again until the right edge.
 void tapeDraw(lv_event_t* e) {
   const State* s = (const State*)lv_event_get_user_data(e);
   if (!s || !s->itemCount || s->tapeLen <= 0) return;
@@ -196,9 +199,8 @@ void tapeDraw(lv_event_t* e) {
   const lv_color_t text = lv_obj_get_style_text_color(o, LV_PART_MAIN);
   const lv_opa_t opa = s->tapeFresh ? LV_OPA_COVER : LV_OPA_50;
   const int cy = (a.y1 + a.y2) / 2;
-  const int off = (int)((uint64_t)millis() * TAPE_SPEED / 1000 % (uint32_t)s->tapeLen);
-  int x = a.x1 - off;
-  for (int i = 0; x <= a.x2; i = (i + 1) % s->itemCount) {
+  int x = a.x1 - (int)lroundf(s->headOff);
+  for (int i = s->head % s->itemCount; x <= a.x2; i = (i + 1) % s->itemCount) {
     const TapeItem& it = s->items[i];
     if (x + it.width > a.x1) {
       int cx = x;
@@ -248,6 +250,10 @@ void fillTape(State* s, const StockData& d, bool fresh) {
     it.width = it.wSym + 5 + tapeTriW(s) + 5 + it.wPrice + 6 + it.wPct + TAPE_GAP;
     s->tapeLen += it.width;
     if (q.err) s->tapeFresh = false;
+  }
+  if (s->itemCount) {  // the same place: the same item, at most its new width in
+    s->head %= s->itemCount;
+    s->headOff = std::min(s->headOff, (float)s->items[s->head].width);
   }
   show(s->tape, s->itemCount > 0);
   show(s->title, s->itemCount == 0);
@@ -413,7 +419,14 @@ bool update(void* p) {
     // It moves only on screen; a snapshot of its page keeps the last place.
     const uint32_t now = millis();
     if (s->itemCount && now - s->frameAt >= TAPE_FRAME_MS && widgetOnScreen(s)) {
+      // Back on screen after a while: carry on from where it stopped
+      const uint32_t dt = now - s->frameAt > 4 * TAPE_FRAME_MS ? TAPE_FRAME_MS : now - s->frameAt;
       s->frameAt = now;
+      s->headOff += dt * TAPE_SPEED / 1000.0f;
+      while (s->headOff >= s->items[s->head].width) {
+        s->headOff -= s->items[s->head].width;
+        s->head = (s->head + 1) % s->itemCount;
+      }
       lv_obj_invalidate(s->tape);
       s_sparkPaintMs = now;  // like a chart glide: other pages snapshot rarely meanwhile
     }
